@@ -8,10 +8,17 @@
   * { box-sizing: border-box; }
   body { margin:0; font:15px/1.55 system-ui,-apple-system,Segoe UI,sans-serif; color:var(--ink); }
   header { position:fixed; inset:0 0 auto 0; height:56px; background:#16151a; color:#fff;
-           display:flex; align-items:center; gap:20px; padding:0 24px; z-index:20; }
+           display:flex; align-items:center; gap:20px; padding:0 24px; z-index:20;
+           overflow-x:auto; white-space:nowrap; }
+  @media (max-width:520px) { header { gap:14px; padding:0 16px; font-size:14px; }
+                             header .back { padding-right:12px; } }
   header a { color:#fff; text-decoration:none; opacity:.75; }
-  main { padding-top:56px; max-width:820px; margin:0 auto; }
-  section { padding:40px 24px; border-bottom:1px solid var(--line); min-height:420px; }
+  header a:hover { opacity:1; }
+  header .back { opacity:.55; border-right:1px solid #33313c; padding-right:20px; }
+  .banner { margin-top:56px; background:#fff5f8; border-bottom:1px solid #ffdbe7;
+            color:#9c2b52; padding:11px 24px; font-size:13.5px; text-align:center; }
+  main { max-width:820px; margin:0 auto; }
+  section { padding:44px 24px; border-bottom:1px solid var(--line); min-height:340px; }
   h1 { font-size:34px; margin:.2em 0; } h2 { font-size:22px; margin:.2em 0 1em; }
   p { color:var(--muted); max-width:60ch; }
   button, .btn { font:inherit; padding:10px 18px; border-radius:8px; border:1px solid var(--line);
@@ -30,12 +37,14 @@
 </head>
 <body>
 <header>
-  <strong>flamingo demo</strong>
+  <a href="./" class="back">← flamingo</a>
+  <strong>demo app</strong>
   <a href="#features" id="navfeat">Features</a>
   <a href="#pricing" id="navprice">Pricing</a>
   <a href="#contact" id="navcontact">Contact</a>
 </header>
 
+<div class="banner">Every fault on this page is planted on purpose. It exists to be found.</div>
 <main>
   <section id="hero">
     <h1>A deliberately broken app</h1>
