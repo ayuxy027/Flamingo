@@ -97,6 +97,7 @@ const interactiveTree = (max: number) => `(() => {
   const SEL = ${SELECTOR};
   const vw = innerWidth, vh = innerHeight;
   const out = [], seen = new Set();
+  const blockers = new Map();
   let occluded = 0, offscreen = 0, truncated = 0, hidden = 0;
   for (const el of collectDeep(document, SEL, [])) {
     const r = el.getBoundingClientRect();
@@ -111,7 +112,14 @@ const interactiveTree = (max: number) => `(() => {
     // el.contains(hit) keeps <button><span>text</span></button>. An ancestor hit
     // means something else owns that point, so the element is not clickable there.
     const reachable = hit && (el === hit || el.contains(hit) || (el.shadowRoot && el.shadowRoot.contains(hit)));
-    if (!reachable) { occluded++; continue; }
+    if (!reachable) {
+      occluded++;
+      // A cookie banner or modal blanketing the page shows up here as one ref
+      // blocking many controls, which is the actionable form of "12 occluded".
+      const by = describe(hit);
+      if (by) blockers.set(by, (blockers.get(by) || 0) + 1);
+      continue;
+    }
     const key = x + ":" + y;
     if (seen.has(key)) continue;
     seen.add(key);
@@ -131,6 +139,12 @@ const interactiveTree = (max: number) => `(() => {
       boundingBox: { x: Math.round(r.left), y: Math.round(r.top), width: Math.round(r.width), height: Math.round(r.height) },
     };
     const t = el.getAttribute("type"); if (t) item.type = t;
+    if (el.tagName === "A" && el.href) {
+      item.href = el.href;
+      // Same document (or a pure hash/javascript: link) means clicking it is a
+      // JS question; a different document means clicking it just leaves the page.
+      item.leavesPage = el.href.split("#")[0] !== location.href.split("#")[0] && !/^javascript:/i.test(el.getAttribute("href") || "");
+    }
     if (el.disabled) item.disabled = true;
     // Clicking a <select> opens a native popup that blocks the renderer until a
     // human dismisses it. Nothing automated may click one.
@@ -144,9 +158,14 @@ const interactiveTree = (max: number) => `(() => {
   const frames = [...document.querySelectorAll("iframe,frame")].map((f) => ({
     ref: describe(f), src: f.getAttribute("src") || (f.hasAttribute("srcdoc") ? "srcdoc" : null),
   }));
+  const blockedBy = [...blockers.entries()]
+    .map(([ref, count]) => ({ ref, count }))
+    .sort((a, b) => b.count - a.count)
+    .slice(0, 5);
   return {
     interactiveElements: out,
     truncated, occluded, offscreen, hidden,
+    blockedBy,
     frames,
     url: location.href,
     scroll: { x: Math.round(scrollX), y: Math.round(scrollY), maxY: Math.max(0, Math.round(document.documentElement.scrollHeight - vh)) },
@@ -216,6 +235,26 @@ const outlineProbe = `(() => {
   return out;
 })()`;
 
+/**
+ * Containers that scroll independently of the document. A page-level scroll
+ * never reveals their contents, so an agent needs to be told they exist.
+ */
+const scrollableProbe = `(() => {
+  ${DESCRIBE}
+  const out = [];
+  for (const el of document.querySelectorAll("body *")) {
+    const st = getComputedStyle(el);
+    const scrolls = /(auto|scroll)/.test(st.overflowY) || /(auto|scroll)/.test(st.overflowX);
+    if (!scrolls) continue;
+    const hiddenY = el.scrollHeight - el.clientHeight;
+    const hiddenX = el.scrollWidth - el.clientWidth;
+    if (hiddenY < 20 && hiddenX < 20) continue;
+    out.push({ ref: describe(el), hiddenPixelsY: Math.round(hiddenY), hiddenPixelsX: Math.round(hiddenX) });
+    if (out.length >= 8) break;
+  }
+  return out;
+})()`;
+
 /** Elements pinned to the viewport — they follow a scroll and can hide content. */
 const stickyProbe = `(() => {
   ${DESCRIBE}
@@ -230,6 +269,31 @@ const stickyProbe = `(() => {
   }
   return out;
 })()`;
+
+/**
+ * Resolve once layout has stopped changing, or after `maxMs`.
+ *
+ * There is no CDP "layout settled" event, so the alternative is a fixed sleep
+ * long enough for the worst case — which is wasted on every page that is not the
+ * worst case. Two identical frames is a good enough definition of settled.
+ */
+const settleProbe = (maxMs: number) => `new Promise((resolve) => {
+  const started = performance.now();
+  let last = null, stable = 0;
+  const signature = () => {
+    const d = document.documentElement;
+    return d.scrollWidth + "x" + d.scrollHeight + "x" + innerWidth + "x" + innerHeight;
+  };
+  const tick = () => {
+    const sig = signature();
+    if (sig === last) {
+      if (++stable >= 2) return resolve({ settled: true, ms: Math.round(performance.now() - started) });
+    } else { stable = 0; last = sig; }
+    if (performance.now() - started > ${maxMs}) return resolve({ settled: false, ms: Math.round(performance.now() - started) });
+    requestAnimationFrame(tick);
+  };
+  requestAnimationFrame(tick);
+})`;
 
 /** Scroll geometry, read on its own because it is polled between scroll steps. */
 const scrollMetrics = `({
@@ -444,6 +508,10 @@ export interface InteractiveElement {
   boundingBox: { x: number; y: number; width: number; height: number };
   type?: string;
   disabled?: boolean;
+  /** Resolved href, for anchors. */
+  href?: string;
+  /** This anchor points at a different document, so clicking it only navigates away. */
+  leavesPage?: boolean;
   /** Held in place by a fixed/sticky ancestor, so reachable at any scroll position. */
   pinned?: boolean;
   inShadowDom?: boolean;
@@ -457,6 +525,8 @@ export interface InteractiveTree {
   occluded: number;
   offscreen: number;
   hidden: number;
+  /** What is covering the occluded controls, commonest blocker first. */
+  blockedBy: Array<{ ref: string; count: number }>;
   frames: Array<{ ref: string | null; src: string | null }>;
   url: string;
   scroll: { x: number; y: number; maxY: number };
@@ -918,7 +988,7 @@ export class Engine {
 
     for (const vp of viewports) {
       await this.view.resize(vp.width, vp.height);
-      await Bun.sleep(settleMs); // ponytail: fixed wait, no settle event exists; --settle-ms if pages need more
+      await this.settle(settleMs);
       const scan = await this.evaluate<any>(overflowScan(opts.maxOffenders ?? 5));
       if (scan.horizontalOverflow) {
         violations.push({
@@ -931,7 +1001,7 @@ export class Engine {
       }
     }
     await this.view.resize(original.width, original.height);
-    await Bun.sleep(settleMs);
+    await this.settle(settleMs);
     return { violations, viewportsTested: viewports.length };
   }
 
@@ -1225,6 +1295,10 @@ export class Engine {
     let alive = 0;
 
     for (const el of candidates) {
+      if (el.leavesPage) {
+        alive++;
+        continue;
+      }
       const clicked = await this.detectDeadClicks({ x: el.center.x, y: el.center.y, timeoutMs: dwellMs });
       if (!clicked.isDeadClick) {
         alive++;
@@ -1253,6 +1327,7 @@ export class Engine {
       alive,
       dead,
       occluded: tree.occluded,
+      blockedBy: tree.blockedBy,
       truncated: tree.truncated,
     };
   }
@@ -1283,6 +1358,7 @@ export class Engine {
 
     const first = await this.evaluate<{ pageHeight: number; viewportHeight: number; maxScrollY: number }>(scrollMetrics);
     const sticky = await this.evaluate<Array<Record<string, unknown>>>(stickyProbe);
+    const scrollableContainers = await this.evaluate<Array<Record<string, unknown>>>(scrollableProbe);
 
     let steps = 0;
     let reachedBottom = false;
@@ -1334,6 +1410,7 @@ export class Engine {
       lazyLoaded: pageHeight > first.pageHeight,
       initialPageHeight: first.pageHeight,
       sticky,
+      scrollableContainers,
       outline,
       elementCount: elements.size,
       truncated,
@@ -1452,6 +1529,18 @@ export class Engine {
           Math.abs(e.documentY - target.documentY) < Math.abs(best.documentY - target.documentY) ? e : best);
   }
 
+  /**
+   * Wait for layout to stop changing, up to `maxMs`.
+   * Falls back to a plain sleep if the page cannot run the probe.
+   */
+  private async settle(maxMs: number): Promise<void> {
+    try {
+      await this.evaluate<{ settled: boolean; ms: number }>(settleProbe(maxMs));
+    } catch {
+      await Bun.sleep(maxMs);
+    }
+  }
+
   /** Scroll to an absolute document position. */
   private async scrollToY(y: number): Promise<void> {
     await this.evaluate(`(() => { scrollTo(0, ${Math.max(0, Math.round(y))}); return 1; })()`);
@@ -1491,6 +1580,11 @@ export class Engine {
 
   /** Click a control and classify what happened. */
   private async exerciseControl(el: InteractiveElement, dwellMs: number): Promise<Record<string, unknown>> {
+    // A link to another document is alive by construction, and clicking it only
+    // navigates away from the page being tested and forces a reload to come back.
+    if (el.leavesPage) {
+      return { ref: el.ref, text: el.text, kind: "link", status: "alive", reason: "leaves-page", href: el.href };
+    }
     const r = await this.detectDeadClicks({ x: el.center.x, y: el.center.y, timeoutMs: dwellMs });
     if (!r.isDeadClick) {
       return { ref: el.ref, text: el.text, kind: "control", status: "alive", reason: r.reason, reactionMs: r.reactionMs };
@@ -1713,7 +1807,7 @@ const TOOLS: Record<string, Tool> = {
   },
   getInteractiveTree: {
     description:
-      "Compact list of every element that can actually be acted on, with click-ready CSS-space centre coordinates. Filtered to the viewport and to elements that are not occluded, so it stays small on large pages. Start here to decide what to click.",
+      "Compact list of every element that can actually be acted on, with click-ready CSS-space centre coordinates. Filtered to the viewport and to elements that are not occluded, so it stays small on large pages. Also reports blockedBy — what is covering the unreachable controls, which is how you spot a cookie wall or modal that must be dismissed first. Start here to decide what to click.",
     inputSchema: { type: "object", properties: { max: numSchema } },
     run: (e, a) => e.getInteractiveTree(a),
   },
@@ -2339,6 +2433,9 @@ function printCrawlHuman(r: any) {
   const skipNote = r.skipped ? dim(` (${r.skipped} disabled, skipped)`) : "";
   console.log(`  ${r.controlsFound} control${r.controlsFound === 1 ? "" : "s"} found, ${r.controlsTested} tested${skipNote}`);
   console.log(`  ${green("✓")} ${r.alive} responded`);
+  for (const b of r.blockedBy ?? []) {
+    console.log(`  ${yellow("blocked")} ${b.count} control${b.count === 1 ? "" : "s"} behind ${bold(b.ref)} — untestable until it is dismissed`);
+  }
   if (!r.dead.length) {
     console.log(green("\n✓ every control is wired up\n"));
     return;
@@ -2362,6 +2459,10 @@ function printScrollHuman(r: any) {
   }
   if (r.sticky.length) {
     console.log(`  ${cyan("pinned")}: ${r.sticky.map((s: any) => `${s.ref} (${s.position}, ${s.height}px)`).join(", ")}`);
+  }
+  for (const c of r.scrollableContainers ?? []) {
+    // Scrolling the page never reveals these; they need scrollTo(selector).
+    console.log(`  ${yellow("scrolls separately")}: ${bold(c.ref)} hides ${c.hiddenPixelsY}px below its own fold`);
   }
   if (r.outline.length) {
     console.log(`\n  ${bold("outline")}`);
@@ -2425,7 +2526,14 @@ function printStressHuman(r: any) {
 
 function printTreeHuman(r: any) {
   console.log(`${bold(`${r.interactiveElements.length} actionable element${r.interactiveElements.length === 1 ? "" : "s"}`)} ${dim(`${r.viewport.width}x${r.viewport.height}`)}`);
-  console.log(dim(`  ${r.occluded} occluded, ${r.offscreen} off-viewport${r.truncated ? `, ${r.truncated} truncated` : ""}\n`));
+  console.log(dim(`  ${r.occluded} occluded, ${r.offscreen} off-viewport${r.truncated ? `, ${r.truncated} truncated` : ""}`));
+  if (r.blockedBy?.length) {
+    for (const b of r.blockedBy) {
+      console.log(`  ${yellow("blocked")} ${b.count} control${b.count === 1 ? "" : "s"} behind ${bold(b.ref)}`);
+    }
+  }
+  if (r.frames?.length) console.log(dim(`  ${r.frames.length} iframe(s) present — their contents are not reachable`));
+  console.log();
   for (const el of r.interactiveElements) {
     const text = el.text ? ` ${JSON.stringify(el.text)}` : "";
     console.log(`  ${cyan(`(${el.center.x}, ${el.center.y})`)}  ${el.ref}${text}${el.disabled ? dim(" [disabled]") : ""}`);

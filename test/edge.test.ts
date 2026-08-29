@@ -188,3 +188,67 @@ describe("navigation primitives that can never resolve", () => {
     expect((await e.getInteractiveTree()).interactiveElements.length).toBeGreaterThan(0);
   }, 60_000);
 });
+
+describe("what is covering the page", () => {
+  test("a full-page overlay is named, with a count of what it blocks", async () => {
+    const wall = Bun.serve({ port: 0, fetch: () => new Response(
+      `<!doctype html><body style="margin:0">
+       ${Array.from({ length: 6 }, (_, i) => `<button id="b${i}" style="position:absolute;left:${(i % 3) * 140}px;top:${Math.floor(i / 3) * 60}px;width:120px;height:40px">B${i}</button>`).join("")}
+       <button id="accept" style="position:fixed;bottom:20px;left:20px;width:120px;height:40px;z-index:10">Accept</button>
+       <div id="cookiewall" style="position:fixed;inset:0;background:rgba(0,0,0,.55);z-index:9"></div>
+       </body>`, { headers: { "content-type": "text/html" } }) });
+    try {
+      using e = await Engine.open({ width: 800, height: 400, url: `http://127.0.0.1:${wall.port}/` });
+      const tree = await e.getInteractiveTree();
+      // "6 occluded" is a fact; "6 behind div#cookiewall" is something to act on.
+      expect(tree.blockedBy[0]).toEqual({ ref: "div#cookiewall", count: 6 });
+      expect(tree.interactiveElements.map((x) => x.ref)).toEqual(["button#accept"]);
+    } finally {
+      wall.stop(true);
+    }
+  }, 60_000);
+});
+
+describe("content a page-level scroll never reveals", () => {
+  test("independently scrollable containers are reported", async () => {
+    const srv = Bun.serve({ port: 0, fetch: () => new Response(
+      `<!doctype html><body style="margin:0">
+       <div id="list" style="height:120px;overflow-y:auto">
+         ${Array.from({ length: 40 }, (_, i) => `<div style="height:30px">row ${i}</div>`).join("")}
+       </div></body>`, { headers: { "content-type": "text/html" } }) });
+    try {
+      using e = await Engine.open({ width: 800, height: 400, url: `http://127.0.0.1:${srv.port}/` });
+      const map = await e.scrollScan();
+      const list = map.scrollableContainers.find((c: any) => c.ref === "div#list") as any;
+      expect(list).toBeDefined();
+      expect(list.hiddenPixelsY).toBeGreaterThan(500);
+    } finally {
+      srv.stop(true);
+    }
+  }, 60_000);
+
+  test("links off the page are classified without navigating away", async () => {
+    const srv = Bun.serve({ port: 0, fetch: () => new Response(
+      `<!doctype html><body style="margin:0">
+       <a id="ext" href="https://example.com/other">External</a>
+       <a id="frag" href="#top">Fragment</a></body>`, { headers: { "content-type": "text/html" } }) });
+    try {
+      using e = await Engine.open({ width: 800, height: 400, url: `http://127.0.0.1:${srv.port}/` });
+      const tree = await e.getInteractiveTree();
+      const ext = tree.interactiveElements.find((x) => x.ref === "a#ext")!;
+      const frag = tree.interactiveElements.find((x) => x.ref === "a#frag")!;
+      expect(ext.leavesPage).toBe(true);
+      // a same-document fragment link still depends on JS, so it must be clicked
+      expect(frag.leavesPage).toBe(false);
+
+      const started = Date.now();
+      const r = await e.crawl({ dwellMs: 400 });
+      // the external link is alive by construction, so no navigation was needed
+      expect(r.alive).toBeGreaterThanOrEqual(1);
+      expect(e.view.url).toContain("127.0.0.1");
+      expect(Date.now() - started).toBeLessThan(15_000);
+    } finally {
+      srv.stop(true);
+    }
+  }, 60_000);
+});

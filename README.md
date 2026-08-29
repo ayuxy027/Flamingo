@@ -171,6 +171,17 @@ clickable, with pixel coordinates, and drives the page with native events.
 `occluded` and `offscreen` are the point: 44 elements matched the selector, 1 is
 genuinely actionable. That filtering is what keeps the payload small.
 
+It also reports *what* is in the way, which is the actionable half:
+
+```
+6 actionable elements 1280x800
+  0 occluded, 6 off-viewport
+  blocked 6 controls behind div#cookiewall
+```
+
+A cookie wall or modal shows up as one element blocking many controls — so an
+agent knows to dismiss it first instead of concluding the page is broken.
+
 ---
 
 ## CLI
@@ -285,7 +296,7 @@ const report = await e.compileHealthReport();
 | Method | Notes |
 | :-- | :-- |
 | `goto(url)` / `waitForIdle()` | Navigate; network-quiet wait (chrome) |
-| `getInteractiveTree({ max })` | Actionable elements + centre coordinates |
+| `getInteractiveTree({ max })` | Actionable elements, centre coordinates, and what blocks the rest |
 | `detectPointerBlocker({ x, y })` | What blocks a click, and why |
 | `clickCoordinate({ x, y })` / `({ selector })` | Selector form waits for actionability |
 | `typeInput({ text, realKeys })` | `realKeys` sends per-character keydown |
@@ -343,6 +354,7 @@ resolves the moment any of them fires.
 | :-- | --: | --: |
 | `detectDeadClicks`, live control | 1005ms | **4ms** |
 | `crawl`, 40 controls | 28.5s | **6.0s** |
+| `auditResponsiveness`, 2 viewports | 762ms | **292ms** |
 | `getInteractiveTree`, 3000-element page | — | **115ms** |
 
 Proving a control is *dead* still costs the full window — absence cannot be
@@ -389,7 +401,7 @@ observed early — which is why `--dwell` exists.
 ## Tests
 
 ```bash
-bun test          # 90 tests against a real browser and a real fixture server
+bun test          # 93 tests against a real browser and a real fixture server
 bun run typecheck
 ```
 
