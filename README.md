@@ -366,8 +366,10 @@ observed early — which is why `--dwell` exists.
   without clicking. A watchdog rebuilds the view if any other page blocks it.
 - **A navigation that never completes poisons the view permanently.** Every later
   navigate throws `ERR_INVALID_STATE`, and neither `reload()` nor anything else
-  clears it. `goto` times out and the next one rebuilds, so one hung link cannot
-  kill a whole crawl.
+  clears it. `goto`, `goBack` and `reload` all run under a deadline, and a timeout
+  rebuilds the view — so one hung link cannot kill a whole crawl. (`goBack()` on
+  the chrome backend never resolves once history runs out, which is how this was
+  found.)
 - **Uncaught errors never reach the console hook.** `Bun.WebView`'s `console`
   option only sees explicit `console.*` calls, so a real `throw` is invisible.
   Error and `unhandledrejection` listeners are injected to forward them.
@@ -387,7 +389,7 @@ observed early — which is why `--dwell` exists.
 ## Tests
 
 ```bash
-bun test          # 87 tests against a real browser and a real fixture server
+bun test          # 90 tests against a real browser and a real fixture server
 bun run typecheck
 ```
 

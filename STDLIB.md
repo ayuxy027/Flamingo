@@ -176,5 +176,10 @@ and `tsc` is invoked via `bunx` without being installed into the project.
 - **Bun 1.4.0 ships types that disagree with its runtime**: `bun.d.ts` declares
   `back()` and `forward()` on `WebView`, but the runtime only implements
   `goBack()` and `goForward()`. Calling the documented name throws.
+- **`goBack()` on the chrome backend never resolves once history runs out**, and
+  the pending navigation it leaves behind poisons the view exactly like a hung
+  `navigate()` does. Every navigation primitive here — `goto`, `goBack`,
+  `reload` — therefore runs under a deadline, and a timeout marks the view for
+  rebuild rather than wedging the process.
 
 Each of these is documented as a comment at the exact site in `flamingo.ts`.

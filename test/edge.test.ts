@@ -153,3 +153,38 @@ describe("correctness of what gets reported", () => {
     expect(hits).toHaveLength(1);
   }, 60_000);
 });
+
+describe("navigation primitives that can never resolve", () => {
+  test("repeated goBack stays bounded and leaves the engine usable", async () => {
+    // Bun 1.4.0 chrome: goBack() can never resolve once history runs out, and the
+    // pending navigation it leaves poisons the view. The guarantee worth asserting
+    // is boundedness — whether a given call times out is Bun's business, not ours.
+    using e = await Engine.open({ backend: "chrome", width: 400, height: 300, url: `${base}/shadow` });
+    const started = Date.now();
+    for (let i = 0; i < 3; i++) await e.goBack({ timeoutMs: 3000 });
+    expect(Date.now() - started).toBeLessThan(20_000);
+
+    // whatever happened, the engine recovers and works
+    await e.goto(`${base}/shadow`);
+    expect((await e.getInteractiveTree()).interactiveElements.length).toBeGreaterThan(0);
+  }, 90_000);
+
+  test("stress completes on the chrome backend rather than hanging", async () => {
+    using e = await Engine.open({ backend: "chrome", width: 800, height: 600, url: `${base}/spa` });
+    const started = Date.now();
+    const r = await e.stressTest({ maxTargets: 1, settleMs: 100 });
+    expect(Date.now() - started).toBeLessThan(120_000);
+    expect(r.scenarios.length).toBeGreaterThan(0);
+    // a scenario blocked by a browser limitation is reported, never silently passed
+    for (const s of r.scenarios) {
+      if (s.ran === false) expect(String(s.threw).length).toBeGreaterThan(0);
+    }
+  }, 180_000);
+
+  test("reload is guarded the same way", async () => {
+    using e = await Engine.open({ width: 400, height: 300, url: `${base}/shadow` });
+    const r = await e.reload();
+    expect(r.timedOut).toBe(false);
+    expect((await e.getInteractiveTree()).interactiveElements.length).toBeGreaterThan(0);
+  }, 60_000);
+});

@@ -420,6 +420,8 @@ export interface EngineOptions {
   url?: string;
   /** Max buffered console and network entries, oldest dropped. @default 500 */
   bufferSize?: number;
+  /** Called as long-running sweeps advance. Use it to show progress. */
+  onProgress?: (stage: string, detail: string) => void;
   /** How long an in-page evaluate may stall before the view is rebuilt. @default 10000 */
   evaluateTimeoutMs?: number;
 }
@@ -552,6 +554,7 @@ export class Engine {
   private navigationPoisoned = false;
   private recycles = 0;
   private readonly evaluateTimeoutMs: number;
+  private readonly onProgress: (stage: string, detail: string) => void;
 
   private constructor(opts: EngineOptions) {
     this.backend = opts.backend ?? "webkit";
@@ -559,6 +562,7 @@ export class Engine {
     this.width = opts.width ?? 1280;
     this.height = opts.height ?? 800;
     this.evaluateTimeoutMs = opts.evaluateTimeoutMs ?? 10_000;
+    this.onProgress = opts.onProgress ?? (() => {});
 
     let backend: Bun.WebView.Backend;
     if (this.backend === "chrome") {
@@ -769,28 +773,66 @@ export class Engine {
     url: string,
     { timeoutMs = 30_000 } = {},
   ): Promise<{ url: string; title: string; timedOut: boolean; recovered: boolean }> {
-    let recovered = false;
-    if (this.navigationPoisoned) {
-      await this.recycleView();
-      recovered = true;
-    }
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    let navError: unknown;
-    const navigation = this.view.navigate(url).then(
-      () => "loaded" as const,
-      (e) => { navError = e; return "failed" as const; },
+    const recovered = await this.healIfPoisoned();
+    const { timedOut } = await this.navigationOp(() => this.view.navigate(url), timeoutMs);
+    // A navigation replaces the JS context, taking the error hook with it.
+    await this.evaluate(installErrorForwarder).catch(() => {});
+    return { url: this.view.url, title: this.view.title, timedOut, recovered };
+  }
+
+  /**
+   * Go back in history.
+   *
+   * Bun 1.4.0, chrome backend: `goBack()` never resolves when there is no further
+   * history, and the pending navigation it leaves behind poisons the view for
+   * good. Guarding it turns an unrecoverable hang into a reported timeout.
+   */
+  async goBack({ timeoutMs = 10_000 } = {}): Promise<{ url: string; timedOut: boolean }> {
+    await this.healIfPoisoned();
+    const { timedOut } = await this.navigationOp(
+      () => (this.view as unknown as { goBack(): Promise<void> }).goBack(),
+      timeoutMs,
     );
-    const timeout = new Promise<"timeout">((resolve) => {
+    return { url: this.view.url, timedOut };
+  }
+
+  /** Reload the current page. */
+  async reload({ timeoutMs = 30_000 } = {}): Promise<{ url: string; timedOut: boolean }> {
+    await this.healIfPoisoned();
+    const { timedOut } = await this.navigationOp(() => this.view.reload(), timeoutMs);
+    await this.evaluate(installErrorForwarder).catch(() => {});
+    return { url: this.view.url, timedOut };
+  }
+
+  private async healIfPoisoned(): Promise<boolean> {
+    if (!this.navigationPoisoned) return false;
+    await this.recycleView();
+    return true;
+  }
+
+  /**
+   * Run a navigation with a deadline.
+   *
+   * Every navigation primitive here can fail to resolve — a server that never
+   * answers, or `goBack()` past the start of history — and each one leaves the
+   * view unable to navigate again. Timing out and marking the view for rebuild is
+   * the only recovery.
+   */
+  private async navigationOp(op: () => Promise<void>, timeoutMs: number): Promise<{ timedOut: boolean }> {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    let failure: unknown;
+    const running = op().then(
+      () => "done" as const,
+      (e) => { failure = e; return "failed" as const; },
+    );
+    const deadline = new Promise<"timeout">((resolve) => {
       timer = setTimeout(() => resolve("timeout"), timeoutMs);
     });
-    const outcome = await Promise.race([navigation, timeout]);
+    const outcome = await Promise.race([running, deadline]);
     clearTimeout(timer);
-    if (outcome === "failed") throw navError;
-    // Leave a marker so the next goto rebuilds instead of throwing ERR_INVALID_STATE.
+    if (outcome === "failed") throw failure;
     if (outcome === "timeout") this.navigationPoisoned = true;
-    // A navigation replaces the JS context, taking the hook with it.
-    await this.evaluate(installErrorForwarder).catch(() => {});
-    return { url: this.view.url, title: this.view.title, timedOut: outcome === "timeout", recovered };
+    return { timedOut: outcome === "timeout" };
   }
 
   /**
@@ -1355,6 +1397,7 @@ export class Engine {
 
       // Bring it into view, then find it again: the coordinates used to click are
       // always read after the scroll settles, never carried over from the map.
+      this.onProgress("interact", target.ref);
       const live = await this.locate(target, map.viewportHeight);
       if (!live) { skipped.push({ ref: target.ref, reason: "not-reachable-after-scroll" }); continue; }
       if (!live.nativePicker && !(await this.stillThere(live.ref, live.center.x, live.center.y))) {
@@ -1500,6 +1543,7 @@ export class Engine {
     const rejected: Array<Record<string, unknown>> = [];
     for (const c of candidates) {
       if (targets.length >= maxTargets) break;
+      this.onProgress("probe", c.ref);
       const live = await this.locate(c, map.viewportHeight);
       if (!live) continue;
       const probe = await this.detectDeadClicks({ x: live.center.x, y: live.center.y, timeoutMs: 250 });
@@ -1533,6 +1577,7 @@ export class Engine {
     };
 
     const run = async (name: string, target: InteractiveElement, body: (at: InteractiveElement) => Promise<void>) => {
+      this.onProgress("scenario", `${name} → ${target.ref}`);
       const at = await this.locate(target, map.viewportHeight);
       if (!at) { scenarios.push({ name, target: target.ref, skipped: "could not relocate" }); return; }
       const before = this.consoleBuf.length;
@@ -1576,7 +1621,8 @@ export class Engine {
       });
       await run("reload-mid-action", target, async (at) => {
         await this.view.click(at.center.x, at.center.y);
-        await this.view.reload();
+        const r = await this.reload({ timeoutMs: 15_000 });
+        if (r.timedOut) throw new Error("reload never completed");
       });
       await run("navigate-away-mid-action", target, async (at) => {
         await this.view.click(at.center.x, at.center.y);
@@ -1593,9 +1639,8 @@ export class Engine {
       });
       await run("back-mid-action", target, async (at) => {
         await this.view.click(at.center.x, at.center.y);
-        // Bun 1.4.0 ships types declaring back()/forward() while the runtime only
-        // implements goBack()/goForward(). Call what actually exists.
-        await (this.view as unknown as { goBack(): Promise<void> }).goBack();
+        const r = await this.goBack({ timeoutMs: 5_000 });
+        if (r.timedOut) throw new Error("browser back never completed; view rebuilt");
       });
     }
 
@@ -2515,6 +2560,7 @@ async function runCli(argv: string[]): Promise<number> {
 
   const engineOpts: EngineOptions = {
     backend,
+    onProgress: json ? undefined : (stage, detail) => process.stderr.write(dim(`  ${stage}: ${detail}\n`)),
     chromePath: str(p.flags, "chrome-path"),
     width: num(p.flags, "width", 1280),
     height: num(p.flags, "height", 800),
