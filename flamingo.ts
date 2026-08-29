@@ -37,11 +37,53 @@ const DESCRIBE = `const describe = (el) => {
     return s;
   };`;
 
+/**
+ * Is this element pinned to the viewport by a fixed/sticky ancestor? Pinned
+ * elements stay reachable at any scroll position, so a scroll pass must dedupe
+ * them by identity rather than by document position.
+ */
+const PINNED = `const isPinned = (el) => {
+    for (let n = el, hops = 0; n && n.nodeType === 1 && hops < 40; hops++) {
+      const p = getComputedStyle(n).position;
+      if (p === "fixed" || p === "sticky") return true;
+      const root = n.getRootNode();
+      n = n.parentElement || (root && root.host) || null;
+    }
+    return false;
+  };`;
+
 /** What counts as "actionable" for an agent. */
 const SELECTOR = `'a[href],button,input,select,textarea,summary,[role="button"],[role="link"],[role="tab"],[role="menuitem"],[role="checkbox"],[role="radio"],[role="switch"],[onclick],[tabindex]:not([tabindex="-1"]),[contenteditable="true"]'`;
 
 /**
- * Flat list of elements an agent can actually act on.
+ * Shadow DOM is not optional any more: every built-in form control, and most
+ * component libraries, put their real controls behind a shadow root that
+ * querySelectorAll cannot see. Both the element walk and the hit test pierce it.
+ */
+const DEEP = `const collectDeep = (root, sel, out) => {
+    for (const el of root.querySelectorAll("*")) {
+      if (el.matches && el.matches(sel)) out.push(el);
+      if (el.shadowRoot) collectDeep(el.shadowRoot, sel, out);
+    }
+    return out;
+  };
+  const deepElementFromPoint = (x, y) => {
+    let el = document.elementFromPoint(x, y);
+    for (let depth = 0; el && el.shadowRoot && depth < 10; depth++) {
+      const inner = el.shadowRoot.elementFromPoint(x, y);
+      if (!inner || inner === el) break;
+      el = inner;
+    }
+    return el;
+  };
+  const deepStack = (x, y) => {
+    const stack = document.elementsFromPoint(x, y);
+    const top = deepElementFromPoint(x, y);
+    return top && top !== stack[0] ? [top, ...stack] : stack;
+  };`;
+
+/**
+ * Flat list of elements an agent can act on.
  *
  * The filtering is the whole point: without it a page with a mega-menu still
  * returns hundreds of entries and we are back to context exhaustion. Elements
@@ -50,23 +92,26 @@ const SELECTOR = `'a[href],button,input,select,textarea,summary,[role="button"],
  */
 const interactiveTree = (max: number) => `(() => {
   ${DESCRIBE}
+  ${DEEP}
+  ${PINNED}
   const SEL = ${SELECTOR};
   const vw = innerWidth, vh = innerHeight;
   const out = [], seen = new Set();
-  let occluded = 0, offscreen = 0, truncated = 0;
-  for (const el of document.querySelectorAll(SEL)) {
+  let occluded = 0, offscreen = 0, truncated = 0, hidden = 0;
+  for (const el of collectDeep(document, SEL, [])) {
     const r = el.getBoundingClientRect();
-    if (r.width < 1 || r.height < 1) { offscreen++; continue; }
+    if (r.width < 1 || r.height < 1) { hidden++; continue; }
     if (r.bottom <= 0 || r.right <= 0 || r.top >= vh || r.left >= vw) { offscreen++; continue; }
     const st = getComputedStyle(el);
-    if (st.visibility === "hidden" || st.display === "none" || st.opacity === "0") { offscreen++; continue; }
+    if (st.visibility === "hidden" || st.display === "none" || st.opacity === "0") { hidden++; continue; }
     // Centre of the *visible* part, so half-scrolled elements still hit-test.
     const x = Math.round((Math.max(r.left, 0) + Math.min(r.right, vw)) / 2);
     const y = Math.round((Math.max(r.top, 0) + Math.min(r.bottom, vh)) / 2);
-    const hit = document.elementFromPoint(x, y);
+    const hit = deepElementFromPoint(x, y);
     // el.contains(hit) keeps <button><span>text</span></button>. An ancestor hit
     // means something else owns that point, so the element is not clickable there.
-    if (!hit || !(el === hit || el.contains(hit))) { occluded++; continue; }
+    const reachable = hit && (el === hit || el.contains(hit) || (el.shadowRoot && el.shadowRoot.contains(hit)));
+    if (!reachable) { occluded++; continue; }
     const key = x + ":" + y;
     if (seen.has(key)) continue;
     seen.add(key);
@@ -78,14 +123,35 @@ const interactiveTree = (max: number) => `(() => {
       ref: describe(el),
       tag: el.tagName.toLowerCase(),
       text,
+      // center is clipped to the viewport so it is always clickable; documentX/Y
+      // come from the unclipped rect so they are stable identity across scrolls.
       center: { x, y },
+      documentX: Math.round(r.left + scrollX),
+      documentY: Math.round(r.top + scrollY),
       boundingBox: { x: Math.round(r.left), y: Math.round(r.top), width: Math.round(r.width), height: Math.round(r.height) },
     };
     const t = el.getAttribute("type"); if (t) item.type = t;
     if (el.disabled) item.disabled = true;
+    // Clicking a <select> opens a native popup that blocks the renderer until a
+    // human dismisses it. Nothing automated may click one.
+    if (el.tagName === "SELECT") item.nativePicker = true;
+    if (el.getRootNode() !== document) item.inShadowDom = true;
+    if (isPinned(el)) item.pinned = true;
     out.push(item);
   }
-  return { interactiveElements: out, truncated, occluded, offscreen, viewport: { width: vw, height: vh } };
+  // Cross-origin and srcdoc frames run in another context that evaluate() cannot
+  // reach. Reporting the count stops an agent concluding the page is empty.
+  const frames = [...document.querySelectorAll("iframe,frame")].map((f) => ({
+    ref: describe(f), src: f.getAttribute("src") || (f.hasAttribute("srcdoc") ? "srcdoc" : null),
+  }));
+  return {
+    interactiveElements: out,
+    truncated, occluded, offscreen, hidden,
+    frames,
+    url: location.href,
+    scroll: { x: Math.round(scrollX), y: Math.round(scrollY), maxY: Math.max(0, Math.round(document.documentElement.scrollHeight - vh)) },
+    viewport: { width: vw, height: vh },
+  };
 })()`;
 
 /**
@@ -96,13 +162,14 @@ const interactiveTree = (max: number) => `(() => {
  */
 const hitTest = (x: number, y: number) => `(() => {
   ${DESCRIBE}
+  ${DEEP}
   const SEL = ${SELECTOR};
   const x = ${x}, y = ${y};
   const none = { isBlocked: false, intendedElement: null, blockingElement: null, pointerEventsStyle: null, stack: [] };
   if (x < 0 || y < 0 || x > innerWidth || y > innerHeight) return { ...none, outsideViewport: true };
-  const stack = document.elementsFromPoint(x, y);
+  const stack = deepStack(x, y);
   if (!stack.length) return { ...none, outsideViewport: false };
-  const idx = stack.findIndex((e) => e.matches(SEL));
+  const idx = stack.findIndex((e) => e.matches && e.matches(SEL));
   const intended = idx >= 0 ? stack[idx] : null;
   const top = stack[0];
   // Blocked when the topmost element is neither the target nor inside it.
@@ -116,6 +183,72 @@ const hitTest = (x: number, y: number) => `(() => {
     pointerEventsStyle: getComputedStyle(isBlocked ? top : (intended || top)).pointerEvents,
     stack: stack.slice(0, 5).map(describe),
   };
+})()`;
+
+/**
+ * Headings and landmarks with document-space positions, so a scroll pass can
+ * assemble an outline of the whole page rather than one viewport at a time.
+ */
+const outlineProbe = `(() => {
+  ${DESCRIBE}
+  ${PINNED}
+  const out = [];
+  const HEADINGS = "h1,h2,h3,h4,[role=heading]";
+  const LANDMARKS = "main,nav,header,footer,aside,form,section[aria-label],[role=region][aria-label]";
+  const push = (el, text, level) => {
+    if (!text) return;
+    // Pinned chrome rides along with the scroll, so its document position is
+    // meaningless and it would otherwise be re-recorded at every step.
+    if (isPinned(el)) return;
+    const r = el.getBoundingClientRect();
+    out.push({ ref: describe(el), tag: el.tagName.toLowerCase(), level, text, documentY: Math.round(r.top + scrollY) });
+  };
+  const clean = (v) => (v || "").trim().replace(/\\s+/g, " ").slice(0, 80);
+  for (const el of document.querySelectorAll(HEADINGS)) {
+    const m = /^H([1-6])$/.exec(el.tagName);
+    push(el, clean(el.innerText), m ? Number(m[1]) : Number(el.getAttribute("aria-level")) || null);
+  }
+  for (const el of document.querySelectorAll(LANDMARKS)) {
+    // Landmarks use their label only: innerText on <main> is the whole page.
+    push(el, clean(el.getAttribute("aria-label")), null);
+  }
+  out.sort((a, b) => a.documentY - b.documentY);
+  return out;
+})()`;
+
+/** Elements pinned to the viewport — they follow a scroll and can hide content. */
+const stickyProbe = `(() => {
+  ${DESCRIBE}
+  const out = [];
+  for (const el of document.querySelectorAll("body *")) {
+    const p = getComputedStyle(el).position;
+    if (p !== "fixed" && p !== "sticky") continue;
+    const r = el.getBoundingClientRect();
+    if (r.width < 20 || r.height < 8) continue;
+    out.push({ ref: describe(el), position: p, height: Math.round(r.height), width: Math.round(r.width) });
+    if (out.length >= 10) break;
+  }
+  return out;
+})()`;
+
+/** Scroll geometry, read on its own because it is polled between scroll steps. */
+const scrollMetrics = `({
+  scrollY: Math.round(scrollY),
+  viewportHeight: innerHeight,
+  pageHeight: Math.round(document.documentElement.scrollHeight),
+  maxScrollY: Math.max(0, Math.round(document.documentElement.scrollHeight - innerHeight))
+})`;
+
+const selectAt = (x: number, y: number) => `(() => {
+  const el = document.elementFromPoint(${x}, ${y});
+  if (!el || el.tagName !== "SELECT") return null;
+  return { value: el.value, optionCount: el.options.length, options: [...el.options].map((o) => o.text).slice(0, 20) };
+})()`;
+
+const focusedFieldValue = `(() => {
+  const a = document.activeElement;
+  if (!a) return null;
+  return { tag: a.tagName.toLowerCase(), type: a.getAttribute("type"), value: a.value ?? null, editable: a.isContentEditable === true };
 })()`;
 
 /** Horizontal overflow at the current viewport, worst offenders first. */
@@ -171,31 +304,86 @@ const brokenAssetsProbe = `(() => {
 // DOM.documentUpdated (which the PRD names) only fires when the whole document is
 // replaced, not on subtree mutations — so it misses nearly every real click. A
 // MutationObserver installed before the click is the only thing that sees them.
-const installMutationCounter = `(() => {
-  if (window.__flamingoObs) window.__flamingoObs.disconnect();
-  window.__flamingoMut = 0;
-  const a = document.activeElement;
-  window.__flamingoFocus = a ? a.tagName + "#" + (a.id || "") : "";
-  const o = new MutationObserver((ms) => { window.__flamingoMut += ms.length; });
-  o.observe(document.documentElement, { subtree: true, childList: true, attributes: true, characterData: true });
-  window.__flamingoObs = o;
+//
+// The probe only *accumulates*; deciding when to stop is the host's job, so it can
+// weigh page signals against network and navigation together and exit the moment
+// any of them fires instead of sleeping out a fixed window.
+const installReactionProbe = `(() => {
+  const w = window;
+  if (w.__flamingoCleanup) { try { w.__flamingoCleanup(); } catch (e) {} }
+  const a0 = document.activeElement;
+  const before = a0 ? a0.tagName + "#" + (a0.id || "") : "";
+  w.__flamingoMut = 0;
+  w.__flamingoFocus = false;
+  w.__flamingoDialogs = 0;
+  w.__flamingoUrl0 = location.href;
+  // Dialogs are a real reaction and would otherwise read as "nothing happened".
+  // They are answered *negatively* on purpose: auto-confirming a crawl through
+  // someone's admin panel would happily delete things.
+  const nativeDialogs = { alert: w.alert, confirm: w.confirm, prompt: w.prompt };
+  w.alert = function () { w.__flamingoDialogs++; };
+  w.confirm = function () { w.__flamingoDialogs++; return false; };
+  w.prompt = function () { w.__flamingoDialogs++; return null; };
+  const obs = new MutationObserver((ms) => { w.__flamingoMut += ms.length; });
+  obs.observe(document.documentElement, { subtree: true, childList: true, attributes: true, characterData: true });
+  // Focus is a reaction a MutationObserver cannot see, and clicking a field
+  // changes nothing else. Only fields count: buttons take focus on every click.
+  const onFocus = (e) => {
+    const t = e.target;
+    if (!t || !t.tagName) return;
+    const now = t.tagName + "#" + (t.id || "");
+    if (now === before) return;
+    if (/^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName) || t.isContentEditable === true) w.__flamingoFocus = true;
+  };
+  document.addEventListener("focusin", onFocus, true);
+  w.__flamingoCleanup = () => {
+    try { obs.disconnect(); } catch (e) {}
+    document.removeEventListener("focusin", onFocus, true);
+    w.alert = nativeDialogs.alert;
+    w.confirm = nativeDialogs.confirm;
+    w.prompt = nativeDialogs.prompt;
+    w.__flamingoCleanup = null;
+  };
   return true;
 })()`;
 
-/** `mutations: -1` means the counter is gone, i.e. navigation replaced the context. */
-const readMutationCounter = `(() => {
-  const n = window.__flamingoMut;
-  const before = window.__flamingoFocus;
-  if (window.__flamingoObs) { window.__flamingoObs.disconnect(); window.__flamingoObs = null; }
-  if (typeof n !== "number") return { mutations: -1, focusChanged: false };
-  const a = document.activeElement;
-  const after = a ? a.tagName + "#" + (a.id || "") : "";
-  // Only a field taking focus counts: buttons take focus on every click, so
-  // counting that would mark every unwired button as alive.
-  const focusChanged = !!a && after !== before &&
-    (/^(INPUT|TEXTAREA|SELECT)$/.test(a.tagName) || a.isContentEditable === true);
-  return { mutations: n, focusChanged };
+/** `mutations: -1` means the probe is gone, i.e. navigation replaced the context. */
+const readReactionProbe = `({
+  mutations: typeof window.__flamingoMut === "number" ? window.__flamingoMut : -1,
+  focusChanged: window.__flamingoFocus === true,
+  dialogs: window.__flamingoDialogs || 0,
+  urlChanged: typeof window.__flamingoUrl0 === "string" && location.href !== window.__flamingoUrl0
+})`;
+
+/**
+ * Forward uncaught errors and unhandled rejections into console.error.
+ *
+ * Bun.WebView's console capture only sees explicit console.* calls, so a real
+ * `throw` — the most important thing a test tool can report — is otherwise
+ * invisible. Routing them through console.error is what makes them visible.
+ */
+const installErrorForwarder = `(() => {
+  if (window.__flamingoErrHook) return true;
+  window.__flamingoErrHook = true;
+  const fmt = (v) => {
+    if (!v) return String(v);
+    // WebKit's Error.stack carries only frames, Chrome's leads with the message.
+    // Build the headline ourselves so both backends report the same thing.
+    const head = v.message ? (v.name ? v.name + ": " : "") + v.message : "";
+    const stack = v.stack ? String(v.stack) : "";
+    if (head && stack) return stack.indexOf(v.message) === 0 || stack.indexOf(head) === 0 ? stack : head + " | " + stack;
+    return head || stack || String(v);
+  };
+  addEventListener("error", (e) => {
+    console.error("[uncaught] " + fmt(e.error || e.message).slice(0, 500));
+  });
+  addEventListener("unhandledrejection", (e) => {
+    console.error("[unhandled rejection] " + fmt(e.reason).slice(0, 500));
+  });
+  return true;
 })()`;
+
+const stopReactionProbe = `(() => { if (window.__flamingoCleanup) window.__flamingoCleanup(); return true; })()`;
 
 const viewportInfo = `({ width: innerWidth, height: innerHeight, deviceScaleFactor: devicePixelRatio, scrollX, scrollY })`;
 
@@ -207,6 +395,13 @@ const viewportInfo = `({ width: innerWidth, height: innerHeight, deviceScaleFact
 // =========================================================================
 
 export type Backend = "webkit" | "chrome";
+
+interface ReactionProbe {
+  mutations: number;
+  focusChanged: boolean;
+  dialogs: number;
+  urlChanged: boolean;
+}
 
 export interface EngineOptions {
   /**
@@ -225,12 +420,45 @@ export interface EngineOptions {
   url?: string;
   /** Max buffered console and network entries, oldest dropped. @default 500 */
   bufferSize?: number;
+  /** How long an in-page evaluate may stall before the view is rebuilt. @default 10000 */
+  evaluateTimeoutMs?: number;
 }
 
 export interface ConsoleEntry {
   type: string;
   text: string;
   timestamp: number;
+}
+
+export interface InteractiveElement {
+  ref: string;
+  tag: string;
+  text: string;
+  /** Viewport-space centre, clipped so it is always a valid click target. */
+  center: { x: number; y: number };
+  /** Document-space position of the element's top-left, stable across scrolling. */
+  documentX: number;
+  documentY: number;
+  boundingBox: { x: number; y: number; width: number; height: number };
+  type?: string;
+  disabled?: boolean;
+  /** Held in place by a fixed/sticky ancestor, so reachable at any scroll position. */
+  pinned?: boolean;
+  inShadowDom?: boolean;
+  /** A <select>: clicking it opens a native popup that blocks the renderer. */
+  nativePicker?: boolean;
+}
+
+export interface InteractiveTree {
+  interactiveElements: InteractiveElement[];
+  truncated: number;
+  occluded: number;
+  offscreen: number;
+  hidden: number;
+  frames: Array<{ ref: string | null; src: string | null }>;
+  url: string;
+  scroll: { x: number; y: number; maxY: number };
+  viewport: { width: number; height: number };
 }
 
 export interface OverflowOffender {
@@ -268,13 +496,46 @@ const CHROME_CANDIDATES = [
   "/usr/bin/chromium-browser",
 ];
 
+/**
+ * Labels that read destructive. Controls matching these are skipped by default
+ * during automated interaction — crawling someone's admin panel should not
+ * delete anything. Override with includeDestructive / --include-destructive.
+ */
+const DESTRUCTIVE_LABEL =
+  /\b(delete|remove|destroy|drop|erase|wipe|purge|log ?out|sign ?out|deactivate|deregister|unsubscribe|revoke|cancel subscription|close account|reset)\b/i;
+
+const FIELD_TAGS = new Set(["input", "textarea", "select"]);
+
+/** Type-appropriate sample data, so a field is tested with something it may accept. */
+const SAMPLE_INPUT: Record<string, string> = {
+  email: "flamingo@example.com",
+  password: "Fl4mingo!test",
+  tel: "+15550100",
+  url: "https://example.com",
+  number: "42",
+  search: "flamingo",
+  date: "2026-01-01",
+  time: "12:30",
+  text: "flamingo test",
+};
+
+/** A browser host that died underneath us, as opposed to a real usage error. */
+function isTransientHostFailure(e: unknown): boolean {
+  const msg = String((e as Error)?.message ?? e);
+  return /host process|killed by signal|WebView closed|ERR_WEBVIEW/i.test(msg);
+}
+
 /** The APIs that cannot work without CDP, named here so the error can list them. */
 const CHROME_ONLY = "interceptTraffic, hoverCoordinate, and HTTP status codes in scanBrokenAssets";
 
 export class Engine {
   readonly backend: Backend;
+
+  private _view: Bun.WebView;
   /** The underlying Bun.WebView. Public escape hatch for anything not wrapped here. */
-  readonly view: Bun.WebView;
+  get view(): Bun.WebView {
+    return this._view;
+  }
 
   private consoleBuf: ConsoleEntry[] = [];
   private networkBuf: NetworkEntry[] = [];
@@ -286,12 +547,18 @@ export class Engine {
   private evalChain: Promise<unknown> = Promise.resolve();
   private shotSeq = 0;
   private closed = false;
+  private viewOptions: Bun.WebView.ConstructorOptions;
+  /** A navigation that timed out leaves the view permanently unable to navigate. */
+  private navigationPoisoned = false;
+  private recycles = 0;
+  private readonly evaluateTimeoutMs: number;
 
   private constructor(opts: EngineOptions) {
     this.backend = opts.backend ?? "webkit";
     this.cap = opts.bufferSize ?? 500;
     this.width = opts.width ?? 1280;
     this.height = opts.height ?? 800;
+    this.evaluateTimeoutMs = opts.evaluateTimeoutMs ?? 10_000;
 
     let backend: Bun.WebView.Backend;
     if (this.backend === "chrome") {
@@ -303,35 +570,81 @@ export class Engine {
       backend = "webkit";
     }
 
-    this.view = new Bun.WebView({
+    this.viewOptions = {
       width: this.width,
       height: this.height,
       backend,
       // Wired at construction so page errors are captured before any navigation.
       console: (type: string, ...args: unknown[]) => this.pushConsole(type, args),
-    });
-    this.view.onNavigated = () => { this.navCount++; };
+    };
+    this._view = this.buildView();
+  }
+
+  /** Construct a view and attach the listeners every view needs. */
+  private buildView(): Bun.WebView {
+    const view = new Bun.WebView(this.viewOptions);
+    view.onNavigated = () => { this.navCount++; };
+    return view;
+  }
+
+  /**
+   * Replace a view that can no longer navigate.
+   *
+   * Once a navigation is left pending — a server that accepts the connection and
+   * never answers — every later navigate on that view throws ERR_INVALID_STATE,
+   * and neither reload() nor anything else clears it. Rebuilding is the only
+   * recovery. The console and network buffers live on the Engine, so nothing
+   * recorded so far is lost; one hung link cannot kill a whole crawl.
+   */
+  private async recycleView(): Promise<void> {
+    const old = this._view;
+    this._view = this.buildView();
+    this.navigationPoisoned = false;
+    this.evalChain = Promise.resolve();
+    this.recycles++;
+    try { old.close(); } catch { /* already gone */ }
+    await this._view.navigate("about:blank");
+    await this._view.resize(this.width, this.height);
+    if (this.backend === "chrome") await this.enableNetwork();
+    await this.installErrorCapture();
   }
 
   static async open(opts: EngineOptions = {}): Promise<Engine> {
     const engine = new Engine(opts);
     try {
-      // about:blank first: it establishes the CDP session, which is what lets
-      // Network.enable be wired BEFORE the first real navigation. Enabling after
-      // would miss every request the page fires on load — including the failures.
-      await engine.view.navigate("about:blank");
-      // The two backends read the constructor's width/height differently: webkit
-      // sizes the CSS viewport, chrome sizes the outer window and loses ~81px to
-      // browser chrome even headless. resize() means viewport on both, so this
-      // makes "the viewport you asked for" true regardless of backend.
-      await engine.view.resize(engine.width, engine.height);
-      if (engine.backend === "chrome") await engine.enableNetwork();
-      if (opts.url) await engine.goto(opts.url);
+      await engine.initialise(opts.url);
     } catch (e) {
-      engine.close();
-      throw e;
+      // The browser host process is shared by every view in this process, and can
+      // be torn down underneath one that is still starting. Rebuilding respawns
+      // it, which turns a transient death into a hiccup instead of a failed run.
+      if (!isTransientHostFailure(e)) {
+        engine.close();
+        throw e;
+      }
+      try {
+        await engine.recycleView();
+        if (opts.url) await engine.goto(opts.url);
+      } catch (retryError) {
+        engine.close();
+        throw retryError;
+      }
     }
     return engine;
+  }
+
+  private async initialise(url?: string): Promise<void> {
+    // about:blank first: it establishes the CDP session, which is what lets
+    // Network.enable be wired BEFORE the first real navigation. Enabling after
+    // would miss every request the page fires on load — including the failures.
+    await this.view.navigate("about:blank");
+    // The two backends read the constructor's width/height differently: webkit
+    // sizes the CSS viewport, chrome sizes the outer window and loses ~81px to
+    // browser chrome even headless. resize() means viewport on both, so this
+    // makes "the viewport you asked for" true regardless of backend.
+    await this.view.resize(this.width, this.height);
+    if (this.backend === "chrome") await this.enableNetwork();
+    await this.installErrorCapture();
+    if (url) await this.goto(url);
   }
 
   // ---------------------------------------------------------------- internals
@@ -377,6 +690,19 @@ export class Engine {
     });
   }
 
+  /**
+   * Start capturing uncaught errors. On chrome the hook is registered to run
+   * before any page script, so load-time throws are caught too; on webkit it can
+   * only be installed once a document exists, so it catches everything after load.
+   */
+  private async installErrorCapture(): Promise<void> {
+    if (this.backend === "chrome") {
+      const source = installErrorForwarder.replace(/^\(\(\) => \{/, "(() => {");
+      await this.view.cdp("Page.addScriptToEvaluateOnNewDocument", { source }).catch(() => {});
+    }
+    await this.evaluate(installErrorForwarder).catch(() => {});
+  }
+
   private requireChrome(api: string): void {
     if (this.backend === "chrome") return;
     throw new Error(
@@ -386,12 +712,40 @@ export class Engine {
     );
   }
 
+  /**
+   * Run an expression in the page, with a watchdog.
+   *
+   * A blocked renderer never answers — a native `<select>` popup is the known
+   * cause, and there is no reason to assume it is the only one. Rather than hang
+   * forever we abandon the stuck view, rebuild it, and report it. The buffers
+   * survive because they live on the Engine.
+   */
+  private async evaluateGuarded<T>(expr: string): Promise<T> {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const stalled = new Promise<"stalled">((resolve) => {
+      timer = setTimeout(() => resolve("stalled"), this.evaluateTimeoutMs);
+    });
+    // The abandoned promise must not surface later as an unhandled rejection.
+    const pending = this._view.evaluate<T>(expr).then((value) => ({ value }));
+    pending.catch(() => {});
+    const outcome = await Promise.race([pending, stalled]);
+    clearTimeout(timer);
+    if (outcome === "stalled") {
+      await this.recycleView();
+      throw new Error(
+        `page stopped responding to evaluate after ${this.evaluateTimeoutMs}ms; the view was rebuilt. ` +
+          `A native picker (for example an open <select> dropdown) blocks the renderer.`,
+      );
+    }
+    return outcome.value;
+  }
+
   // Bun.WebView allows only one evaluate() in flight per view and throws
   // ERR_INVALID_STATE on a second, so all page calls funnel through one chain.
   private evaluate<T>(expr: string): Promise<T> {
     const run = this.evalChain.then(
-      () => this.view.evaluate<T>(expr),
-      () => this.view.evaluate<T>(expr),
+      () => this.evaluateGuarded<T>(expr),
+      () => this.evaluateGuarded<T>(expr),
     );
     this.evalChain = run.then(
       () => {},
@@ -402,10 +756,41 @@ export class Engine {
 
   // ------------------------------------------------------------- navigation
 
-  /** Navigate and wait for the main frame load to finish. */
-  async goto(url: string): Promise<{ url: string; title: string }> {
-    await this.view.navigate(url);
-    return { url: this.view.url, title: this.view.title };
+  /**
+   * Navigate and wait for the main frame load to finish.
+   *
+   * The timeout is not optional comfort: `navigate()` resolves on load, so a
+   * server that accepts the connection and never finishes the response would
+   * otherwise hang the engine forever. On timeout we return rather than throw —
+   * a page stuck on one slow asset usually has a perfectly testable DOM — and
+   * flag it so the caller can decide.
+   */
+  async goto(
+    url: string,
+    { timeoutMs = 30_000 } = {},
+  ): Promise<{ url: string; title: string; timedOut: boolean; recovered: boolean }> {
+    let recovered = false;
+    if (this.navigationPoisoned) {
+      await this.recycleView();
+      recovered = true;
+    }
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    let navError: unknown;
+    const navigation = this.view.navigate(url).then(
+      () => "loaded" as const,
+      (e) => { navError = e; return "failed" as const; },
+    );
+    const timeout = new Promise<"timeout">((resolve) => {
+      timer = setTimeout(() => resolve("timeout"), timeoutMs);
+    });
+    const outcome = await Promise.race([navigation, timeout]);
+    clearTimeout(timer);
+    if (outcome === "failed") throw navError;
+    // Leave a marker so the next goto rebuilds instead of throwing ERR_INVALID_STATE.
+    if (outcome === "timeout") this.navigationPoisoned = true;
+    // A navigation replaces the JS context, taking the hook with it.
+    await this.evaluate(installErrorForwarder).catch(() => {});
+    return { url: this.view.url, title: this.view.title, timedOut: outcome === "timeout", recovered };
   }
 
   /**
@@ -620,43 +1005,97 @@ export class Engine {
    * `registeredNetworkRequests` is null rather than 0, so a missing signal is
    * never mistaken for a measured zero.
    */
-  async detectDeadClicks({ x, y, timeoutMs = 1000 }: { x: number; y: number; timeoutMs?: number }) {
-    await this.evaluate(installMutationCounter);
+  async detectDeadClicks({
+    x,
+    y,
+    timeoutMs = 600,
+    pollMs = 15,
+  }: {
+    x: number;
+    y: number;
+    timeoutMs?: number;
+    pollMs?: number;
+  }) {
+    await this.evaluate(installReactionProbe);
     const net0 = this.networkBuf.length;
     const log0 = this.consoleBuf.length;
     const nav0 = this.navCount;
+    const started = Date.now();
 
     await this.view.click(x, y);
-    await Bun.sleep(timeoutMs);
 
-    const probe = await this.evaluate<{ mutations: number; focusChanged: boolean }>(readMutationCounter);
-    // mutations < 0 means the counter is gone, i.e. navigation replaced the context.
-    let mutations = probe.mutations;
-    const navigated = this.navCount > nav0 || mutations < 0;
-    if (mutations < 0) mutations = 0;
+    let mutations = 0;
+    let focusChanged = false;
+    let dialogs = 0;
+    let urlChanged = false;
+    let contextLost = false;
+    let reason = "timeout";
+    const deadline = started + timeoutMs;
 
+    // Poll instead of sleeping the full window: a live control usually answers in
+    // one or two ticks, so this is the difference between ~20ms and ~600ms per click.
+    for (;;) {
+      let probe: ReactionProbe | undefined;
+      try {
+        probe = await this.evaluate<ReactionProbe>(readReactionProbe);
+      } catch {
+        contextLost = true;
+        reason = "context-lost";
+        break;
+      }
+      if (!probe || probe.mutations < 0) {
+        contextLost = true;
+        reason = "context-lost";
+        break;
+      }
+      mutations = probe.mutations;
+      focusChanged = probe.focusChanged;
+      dialogs = probe.dialogs;
+      urlChanged = probe.urlChanged;
+
+      if (mutations > 0) { reason = "dom"; break; }
+      if (focusChanged) { reason = "focus"; break; }
+      if (dialogs > 0) { reason = "dialog"; break; }
+      // history.pushState fires no load event, so an SPA route change is
+      // invisible to navigation tracking — the URL is the only tell.
+      if (urlChanged) { reason = "spa-navigation"; break; }
+      if (this.navCount > nav0) { reason = "navigation"; break; }
+      if (this.networkBuf.length > net0) { reason = "network"; break; }
+      if (this.consoleBuf.length > log0) { reason = "console"; break; }
+      if (Date.now() >= deadline) break;
+      await Bun.sleep(pollMs);
+    }
+
+    try { await this.evaluate(stopReactionProbe); } catch { /* context gone */ }
+
+    const navigated = this.navCount > nav0 || contextLost;
     const networkRequests = this.backend === "chrome" ? this.networkBuf.length - net0 : null;
     const consoleLogs = this.consoleBuf.length - log0;
-    const isDeadClick =
-      !navigated && !probe.focusChanged && mutations === 0 && consoleLogs === 0 && (networkRequests ?? 0) === 0;
+    const isDeadClick = reason === "timeout" && !navigated;
 
     return {
       isDeadClick,
       coordinates: { x, y },
+      reason,
+      reactionMs: Date.now() - started,
       navigated,
-      focusChanged: probe.focusChanged,
+      focusChanged,
+      openedDialog: dialogs > 0,
+      spaNavigation: urlChanged,
       registeredDOMChanges: mutations,
       registeredNetworkRequests: networkRequests,
       registeredConsoleLogs: consoleLogs,
-      ...(networkRequests === null ? { note: 'network signal unavailable on webkit; use backend "chrome" for full fidelity' } : {}),
+      ...(networkRequests === null
+        ? { note: 'network signal unavailable on webkit; use backend "chrome" for full fidelity' }
+        : {}),
     };
   }
 
   // ------------------------------------------- 4.4 agentic context and health
 
   /** 10. Compact, viewport-filtered list of everything an agent can act on. */
-  async getInteractiveTree({ max = 100 }: { max?: number } = {}) {
-    return this.evaluate<any>(interactiveTree(max));
+  async getInteractiveTree({ max = 100 }: { max?: number } = {}): Promise<InteractiveTree> {
+    return this.evaluate<InteractiveTree>(interactiveTree(max));
   }
 
   /**
@@ -733,10 +1172,11 @@ export class Engine {
    * by definition leaves the layout alone, so the coordinates captured up front
    * stay valid and cost nothing to reuse.
    */
-  async crawl({ max = 20, dwellMs = 700 }: { max?: number; dwellMs?: number } = {}) {
+  async crawl({ max = 20, dwellMs = 400 }: { max?: number; dwellMs?: number } = {}) {
     const targetUrl = this.view.url;
     const tree = await this.getInteractiveTree({ max });
-    const candidates = tree.interactiveElements.filter((el: any) => !el.disabled);
+    // A <select> opens a blocking native popup, so it is never clicked.
+    const candidates = tree.interactiveElements.filter((el) => !el.disabled && !el.nativePicker);
     const skipped = tree.interactiveElements.length - candidates.length;
 
     const dead: Array<Record<string, unknown>> = [];
@@ -775,13 +1215,420 @@ export class Engine {
     };
   }
 
+  /**
+   * Scroll the whole page and assemble one map of it.
+   *
+   * A single viewport is a keyhole: the tree honestly reports only what is on
+   * screen, so anything below the fold is invisible to an agent. This walks the
+   * page in overlapping steps and merges what it sees into document-space
+   * coordinates, so every control can be reached later with scrollTo.
+   *
+   * Also answers two questions a static look cannot: does the page lazy-load
+   * (its height grew while scrolling), and what is pinned over the content.
+   */
+  async scrollScan({
+    maxSteps = 20,
+    overlap = 0.15,
+    settleMs = 120,
+    maxElements = 400,
+  }: { maxSteps?: number; overlap?: number; settleMs?: number; maxElements?: number } = {}) {
+    await this.scrollToY(0);
+    await Bun.sleep(settleMs);
+
+    const elements = new Map<string, InteractiveElement>();
+    const outline: Array<Record<string, unknown>> = [];
+    const outlineSeen = new Set<string>();
+
+    const first = await this.evaluate<{ pageHeight: number; viewportHeight: number; maxScrollY: number }>(scrollMetrics);
+    const sticky = await this.evaluate<Array<Record<string, unknown>>>(stickyProbe);
+
+    let steps = 0;
+    let reachedBottom = false;
+    let truncated = 0;
+    let pageHeight = first.pageHeight;
+    let lastScrollY = -1;
+
+    for (steps = 0; steps < maxSteps; steps++) {
+      const tree = await this.getInteractiveTree({ max: 200 });
+      const scrollY = tree.scroll.y;
+
+      for (const el of tree.interactiveElements) {
+        // Identity comes from the unclipped document position: an element that is
+        // half off-screen has a different clipped centre at every scroll step, and
+        // keying on that records the same control several times.
+        const key = el.pinned ? `pinned:${el.ref}` : `${el.ref}@${el.documentY}`;
+        if (elements.has(key)) continue;
+        if (elements.size >= maxElements) { truncated++; continue; }
+        elements.set(key, el);
+      }
+
+      for (const h of await this.evaluate<Array<Record<string, unknown>>>(outlineProbe)) {
+        const key = `${h.ref}:${h.text}`;
+        if (outlineSeen.has(key)) continue;
+        outlineSeen.add(key);
+        outline.push(h);
+      }
+
+      const m = await this.evaluate<{ scrollY: number; viewportHeight: number; pageHeight: number; maxScrollY: number }>(scrollMetrics);
+      pageHeight = m.pageHeight;
+
+      if (m.scrollY >= m.maxScrollY) { reachedBottom = true; steps++; break; }
+      // A page that refuses to move is done, however much height it claims.
+      if (m.scrollY === lastScrollY) { steps++; break; }
+      lastScrollY = m.scrollY;
+
+      await this.view.scroll(0, Math.max(100, Math.round(m.viewportHeight * (1 - overlap))));
+      await Bun.sleep(settleMs);
+    }
+
+    outline.sort((a, b) => (a.documentY as number) - (b.documentY as number));
+    return {
+      url: this.view.url,
+      steps,
+      reachedBottom,
+      pageHeight,
+      viewportHeight: first.viewportHeight,
+      // Height growing mid-scroll is the signature of infinite scroll / lazy loading.
+      lazyLoaded: pageHeight > first.pageHeight,
+      initialPageHeight: first.pageHeight,
+      sticky,
+      outline,
+      elementCount: elements.size,
+      truncated,
+      elements: [...elements.values()],
+    };
+  }
+
+  /**
+   * Walk the whole page and exercise everything on it.
+   *
+   * `crawl` tests one viewport; this scrolls and tests the lot, and it types into
+   * fields instead of only clicking, so form controls are checked for actually
+   * accepting input rather than merely taking focus.
+   *
+   * Controls whose label reads destructive are skipped by default and reported as
+   * skipped — pointing this at a real admin panel should not delete anything.
+   */
+  async interact({
+    maxSteps = 12,
+    dwellMs = 400,
+    maxControls = 60,
+    fillFields = true,
+    includeDestructive = false,
+    settleMs = 120,
+  }: {
+    maxSteps?: number;
+    dwellMs?: number;
+    maxControls?: number;
+    fillFields?: boolean;
+    includeDestructive?: boolean;
+    settleMs?: number;
+  } = {}) {
+    const startUrl = this.view.url;
+    const consoleAtStart = this.consoleBuf.length;
+
+    // Map the whole page first, then visit each control by its document position.
+    // Sweeping viewport-by-viewport looks simpler but is not robust: a #hash link
+    // scrolls the page itself, and the sweep then loses its place and skips
+    // whole sections. Driving from a document-space list is deterministic.
+    const map = await this.scrollScan({ maxSteps, settleMs, maxElements: maxControls * 4 });
+
+    const seenRefs = new Set<string>();
+    const queue = map.elements.filter((el) => {
+      const key = el.pinned ? `pinned:${el.ref}` : `${el.ref}@${el.documentY}`;
+      if (seenRefs.has(key)) return false;
+      seenRefs.add(key);
+      return true;
+    });
+
+    const results: Array<Record<string, unknown>> = [];
+    const skipped: Array<Record<string, unknown>> = [];
+    let tested = 0;
+
+    for (const target of queue) {
+      if (tested >= maxControls) { skipped.push({ ref: target.ref, reason: "max-controls-reached" }); continue; }
+      if (target.disabled) { skipped.push({ ref: target.ref, reason: "disabled" }); continue; }
+      if (!includeDestructive && DESTRUCTIVE_LABEL.test(target.text ?? "")) {
+        skipped.push({ ref: target.ref, text: target.text, reason: "destructive-label" });
+        continue;
+      }
+
+      // Bring it into view, then find it again: the coordinates used to click are
+      // always read after the scroll settles, never carried over from the map.
+      const live = await this.locate(target, map.viewportHeight);
+      if (!live) { skipped.push({ ref: target.ref, reason: "not-reachable-after-scroll" }); continue; }
+      if (!live.nativePicker && !(await this.stillThere(live.ref, live.center.x, live.center.y))) {
+        skipped.push({ ref: live.ref, reason: "moving-target" });
+        continue;
+      }
+
+      tested++;
+      const isField = FIELD_TAGS.has(live.tag) || live.nativePicker || live.type === "text" || live.type === "email";
+      results.push(
+        fillFields && isField ? await this.exerciseField(live) : await this.exerciseControl(live, dwellMs),
+      );
+
+      if (this.view.url !== startUrl) await this.goto(startUrl);
+    }
+
+    return {
+      url: startUrl,
+      controlsFound: map.elementCount,
+      controlsTested: tested,
+      alive: results.filter((r) => r.status === "alive").length,
+      dead: results.filter((r) => r.status === "dead"),
+      rejectedInput: results.filter((r) => r.status === "rejected-input"),
+      inspected: results.filter((r) => r.status === "inspected"),
+      skipped,
+      consoleErrorsTriggered: this.consoleBuf
+        .slice(consoleAtStart)
+        .filter((l) => l.type === "error")
+        .map((l) => l.text)
+        .slice(0, 20),
+      results,
+    };
+  }
+
+  /**
+   * Bring a mapped element into view and find it again there.
+   *
+   * Coordinates are always re-read after the scroll settles; the ones in the map
+   * are only ever used to decide where to scroll to.
+   */
+  private async locate(target: InteractiveElement, viewportHeight: number): Promise<InteractiveElement | null> {
+    if (!target.pinned) {
+      await this.scrollToY(Math.max(0, target.documentY - Math.round(viewportHeight / 2)));
+      await Bun.sleep(80);
+    }
+    const tree = await this.getInteractiveTree({ max: 150 });
+    const sameRef = tree.interactiveElements.filter((e) => e.ref === target.ref);
+    if (!sameRef.length) return null;
+    return sameRef.length === 1
+      ? sameRef[0]!
+      : sameRef.reduce((best, e) =>
+          Math.abs(e.documentY - target.documentY) < Math.abs(best.documentY - target.documentY) ? e : best);
+  }
+
+  /** Scroll to an absolute document position. */
+  private async scrollToY(y: number): Promise<void> {
+    await this.evaluate(`(() => { scrollTo(0, ${Math.max(0, Math.round(y))}); return 1; })()`);
+  }
+
+  /** Type into a field and confirm the value actually landed. */
+  private async exerciseField(el: InteractiveElement): Promise<Record<string, unknown>> {
+    // Read a <select> without clicking it: the popup would block the renderer.
+    if (el.nativePicker) {
+      const info = await this.evaluate<{ value: string; optionCount: number; options: string[] } | null>(
+        selectAt(el.center.x, el.center.y),
+      );
+      return { ref: el.ref, kind: "field", status: "inspected", reason: "native-picker", ...(info ?? {}) };
+    }
+    const sample = SAMPLE_INPUT[el.type ?? ""] ?? SAMPLE_INPUT.text!;
+    await this.view.click(el.center.x, el.center.y);
+    const focused = await this.evaluate<{ tag: string; value: string | null; editable: boolean } | null>(focusedFieldValue);
+    if (!focused) {
+      return { ref: el.ref, kind: "field", status: "dead", reason: "click did not focus anything" };
+    }
+
+    await this.view.type(sample);
+    const after = await this.evaluate<{ value: string | null } | null>(focusedFieldValue);
+    const got = after?.value ?? "";
+    // A field that silently drops what it was given is worth knowing about;
+    // a number input rejecting letters is correct, not broken, so compare loosely.
+    const accepted = got.length > 0;
+    return {
+      ref: el.ref,
+      kind: "field",
+      status: accepted ? "alive" : "rejected-input",
+      typed: sample,
+      value: got,
+      exact: got === sample,
+    };
+  }
+
+  /** Click a control and classify what happened. */
+  private async exerciseControl(el: InteractiveElement, dwellMs: number): Promise<Record<string, unknown>> {
+    const r = await this.detectDeadClicks({ x: el.center.x, y: el.center.y, timeoutMs: dwellMs });
+    if (!r.isDeadClick) {
+      return { ref: el.ref, text: el.text, kind: "control", status: "alive", reason: r.reason, reactionMs: r.reactionMs };
+    }
+    const blocker = await this.detectPointerBlocker({ x: el.center.x, y: el.center.y });
+    return {
+      ref: el.ref,
+      text: el.text,
+      kind: "control",
+      status: "dead",
+      reason: blocker.isBlocked ? "blocked" : "no-handler",
+      blockedBy: blocker.isBlocked ? blocker.blockingElement : null,
+    };
+  }
+
+  /** Is the element named by `ref` still the thing at (x, y)? */
+  private async stillThere(ref: string, x: number, y: number): Promise<boolean> {
+    const hit = await this.detectPointerBlocker({ x, y });
+    return hit.intendedElement === ref || hit.topElement === ref;
+  }
+
+  /**
+   * Try to break the page on purpose.
+   *
+   * Ordinary testing exercises the happy path one step at a time. Real users
+   * double-click, navigate away mid-request, refresh halfway through and scroll
+   * while something is loading — which is where unhandled rejections and torn
+   * state actually live. Each scenario is a fixed, repeatable hostile pattern;
+   * nothing here is random, so a failure can be reproduced exactly.
+   */
+  async stressTest({
+    maxTargets = 5,
+    settleMs = 250,
+  }: { maxTargets?: number; settleMs?: number } = {}) {
+    const startUrl = this.view.url;
+
+    // Stress whole-page, not just the first viewport, and only controls that
+    // actually react: a button with no handler has nothing to break, so
+    // hammering it proves nothing.
+    const map = await this.scrollScan({ maxSteps: 8, settleMs: 100 });
+    const candidates = map.elements.filter(
+      (e) =>
+        !e.disabled &&
+        !e.nativePicker &&
+        !DESTRUCTIVE_LABEL.test(e.text ?? "") &&
+        (e.tag === "button" || e.tag === "a" || e.type === "submit"),
+    );
+
+    const targets: InteractiveElement[] = [];
+    const rejected: Array<Record<string, unknown>> = [];
+    for (const c of candidates) {
+      if (targets.length >= maxTargets) break;
+      const live = await this.locate(c, map.viewportHeight);
+      if (!live) continue;
+      const probe = await this.detectDeadClicks({ x: live.center.x, y: live.center.y, timeoutMs: 250 });
+      if (this.view.url !== startUrl) await this.goto(startUrl);
+      if (probe.isDeadClick) { rejected.push({ ref: c.ref, reason: "no reaction to a plain click" }); continue; }
+      targets.push(c);
+    }
+
+    if (!targets.length) {
+      return {
+        url: startUrl,
+        targetsUsed: [],
+        scenarios: [],
+        totalErrors: 0,
+        survived: true,
+        note: "no live, non-destructive controls found to stress",
+        rejected,
+      };
+    }
+
+    const scenarios: Array<Record<string, unknown>> = [];
+    // Errors the page emits on any clean load. A scenario that reloads would
+    // otherwise "find" the page's own boot noise every single time.
+    const baselineErrors = new Set(
+      this.consoleBuf.filter((l) => l.type === "error").map((l) => l.text),
+    );
+
+    const reset = async () => {
+      if (this.view.url !== startUrl) await this.goto(startUrl);
+      await Bun.sleep(settleMs);
+    };
+
+    const run = async (name: string, target: InteractiveElement, body: (at: InteractiveElement) => Promise<void>) => {
+      const at = await this.locate(target, map.viewportHeight);
+      if (!at) { scenarios.push({ name, target: target.ref, skipped: "could not relocate" }); return; }
+      const before = this.consoleBuf.length;
+      let threw: string | null = null;
+      try {
+        await body(at);
+      } catch (e: any) {
+        threw = String(e?.message ?? e).slice(0, 120);
+      }
+      await Bun.sleep(settleMs);
+      const errors = this.consoleBuf
+        .slice(before)
+        .filter((l) => l.type === "error" && !baselineErrors.has(l.text));
+      // "Responsive" means the page can still run script at all.
+      let responsive = false;
+      try {
+        responsive = (await this.evaluate<number>("1")) === 1;
+      } catch { /* context gone */ }
+      scenarios.push({
+        name,
+        target: target.ref,
+        // A scenario that threw never exercised the page; reporting it as a pass
+        // would be worse than not running it at all.
+        ran: threw === null,
+        errorsTriggered: errors.length,
+        errors: errors.map((l) => l.text).slice(0, 5),
+        pageResponsive: responsive,
+        threw,
+      });
+      await reset();
+    };
+
+    for (const target of targets) {
+      // click() resolves when the event has been dispatched, not when an async
+      // handler finishes — so the disruption below genuinely lands mid-flight.
+      await run("rapid-click", target, async (at) => {
+        for (let i = 0; i < 5; i++) await this.view.click(at.center.x, at.center.y);
+      });
+      await run("double-click", target, async (at) => {
+        await this.view.click(at.center.x, at.center.y, { clickCount: 2 });
+      });
+      await run("reload-mid-action", target, async (at) => {
+        await this.view.click(at.center.x, at.center.y);
+        await this.view.reload();
+      });
+      await run("navigate-away-mid-action", target, async (at) => {
+        await this.view.click(at.center.x, at.center.y);
+        await this.goto("about:blank");
+      });
+      await run("scroll-away-mid-action", target, async (at) => {
+        await this.view.click(at.center.x, at.center.y);
+        await this.view.scroll(0, 2000);
+      });
+      await run("resize-mid-action", target, async (at) => {
+        await this.view.click(at.center.x, at.center.y);
+        await this.view.resize(480, 480);
+        await this.view.resize(this.width, this.height);
+      });
+      await run("back-mid-action", target, async (at) => {
+        await this.view.click(at.center.x, at.center.y);
+        // Bun 1.4.0 ships types declaring back()/forward() while the runtime only
+        // implements goBack()/goForward(). Call what actually exists.
+        await (this.view as unknown as { goBack(): Promise<void> }).goBack();
+      });
+    }
+
+    if (targets.length > 1) {
+      const [a, b] = targets;
+      await run("interleaved-clicks", a!, async (at) => {
+        const other = await this.locate(b!, map.viewportHeight);
+        await this.view.click(at.center.x, at.center.y);
+        if (other) await this.view.click(other.center.x, other.center.y);
+      });
+    }
+
+    const totalErrors = scenarios.reduce((n, sc) => n + ((sc.errorsTriggered as number) ?? 0), 0);
+    const notRun = scenarios.filter((sc) => sc.ran === false).length;
+    return {
+      url: startUrl,
+      targetsUsed: targets.map((t) => t.ref),
+      rejected,
+      scenarios,
+      scenariosRun: scenarios.length - notRun,
+      scenariosFailedToRun: notRun,
+      totalErrors,
+      survived: scenarios.every((sc) => sc.pageResponsive !== false),
+    };
+  }
+
   // -------------------------------------------------------------- lifecycle
 
   close(): void {
     if (this.closed) return;
     this.closed = true;
     try {
-      this.view.close();
+      this._view.close();
     } catch {}
   }
 
@@ -879,6 +1726,32 @@ const TOOLS: Record<string, Tool> = {
       "Click every actionable control on the page and report which ones do nothing, and why — swallowed by an overlay, or no handler fired at all. The fastest way to find broken buttons across a page.",
     inputSchema: { type: "object", properties: { max: numSchema, dwellMs: numSchema } },
     run: (e, a) => e.crawl(a),
+  },
+  scrollScan: {
+    description:
+      "Scroll the entire page and return one merged map: every interactive element in document-space coordinates, the heading outline, what is pinned over the content, and whether the page lazy-loads. Use this first to understand a page that is taller than one viewport.",
+    inputSchema: { type: "object", properties: { maxSteps: numSchema, settleMs: numSchema, maxElements: numSchema } },
+    run: (e, a) => e.scrollScan(a),
+  },
+  interact: {
+    description:
+      "Scroll the whole page and exercise every control: click buttons and links, type sample data into fields and verify it was accepted. Controls with destructive-looking labels are skipped unless includeDestructive is set. Broader and slower than crawl.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        maxControls: numSchema,
+        dwellMs: numSchema,
+        fillFields: boolSchema,
+        includeDestructive: boolSchema,
+      },
+    },
+    run: (e, a) => e.interact(a),
+  },
+  stressTest: {
+    description:
+      "Run a fixed sequence of hostile interaction patterns — rapid clicks, double clicks, reload mid-action, navigate away mid-action, resize and scroll mid-action, interleaved clicks — and report the console errors each triggers. Finds race conditions ordinary testing misses. Deterministic and reproducible.",
+    inputSchema: { type: "object", properties: { maxTargets: numSchema, settleMs: numSchema } },
+    run: (e, a) => e.stressTest(a),
   },
   captureRuntimeLogs: {
     description:
@@ -1105,6 +1978,48 @@ const COMMANDS: Record<string, CommandSpec> = {
       "flamingo crawl http://localhost:3000 --max 50 --dwell 1200",
     ],
   },
+  scroll: {
+    args: "<url>",
+    summary: "Scroll the whole page and map everything on it",
+    detail:
+      "One viewport is a keyhole — anything below the fold is invisible. This walks\n" +
+      "the page in overlapping steps and merges what it finds into document-space\n" +
+      "coordinates, so every control can be reached later with scrollTo. It also\n" +
+      "reports the heading outline, what is pinned over the content, and whether the\n" +
+      "page lazy-loads (its height grew while scrolling).",
+    flags: ["--max-steps <n>", "--settle <ms>", "--json"],
+    exits: "0 unless the page fails to load",
+    examples: ["flamingo scroll http://localhost:3000", "flamingo scroll http://localhost:3000 --json | jq .outline"],
+  },
+  interact: {
+    args: "<url>",
+    summary: "Scroll the page and exercise every control on it",
+    detail:
+      "crawl tests one viewport; this tests the whole page. Buttons and links are\n" +
+      "clicked, and fields are typed into with type-appropriate sample data and\n" +
+      "checked for actually accepting it, rather than merely taking focus.\n" +
+      "Controls whose label reads destructive (delete, log out, revoke...) are skipped\n" +
+      "and reported as skipped; pass --include-destructive to test them anyway.",
+    flags: ["--max-controls <n>", "--dwell <ms>", "--no-fill", "--include-destructive", "--json"],
+    exits: "0 if everything responded, 1 if any control is dead or drops input",
+    examples: [
+      "flamingo interact http://localhost:3000",
+      "flamingo interact http://localhost:3000 --max-controls 100 --json",
+    ],
+  },
+  stress: {
+    args: "<url>",
+    summary: "Try to break the page with hostile interaction patterns",
+    detail:
+      "Real users double-click, refresh halfway through a request, navigate away\n" +
+      "mid-action and scroll while something is loading — which is where unhandled\n" +
+      "rejections and torn state actually live. Runs a fixed sequence of those\n" +
+      "patterns and reports the console errors each one triggers. Nothing is random,\n" +
+      "so any failure reproduces exactly.",
+    flags: ["--targets <n>", "--json"],
+    exits: "0 if nothing broke, 1 if any scenario triggered errors or left the page unresponsive",
+    examples: ["flamingo stress http://localhost:3000", "flamingo stress http://localhost:3000 --targets 5 --json"],
+  },
   tree: {
     args: "<url>",
     summary: "Actionable elements with click-ready coordinates",
@@ -1238,7 +2153,12 @@ const LOCAL_FLAG_HELP: Record<string, string> = {
   "--viewports": "Comma-separated, e.g. 1920x1080,768x1024,375x812",
   "--max": "Max elements to consider (tree 100, crawl 20)",
   "--dwell": "How long to watch for a reaction per click (default 700ms)",
-  "--settle": "Wait after each resize (default 250ms)",
+  "--settle": "Wait after each resize or scroll step (default 250ms / 120ms)",
+  "--max-steps": "Maximum scroll steps before stopping (default 20)",
+  "--max-controls": "Maximum controls to exercise (default 60)",
+  "--no-fill": "Click fields instead of typing into them",
+  "--include-destructive": "Also test controls whose label reads destructive",
+  "--targets": "How many live controls to run stress scenarios against (default 5)",
   "--out": "Output path for the image",
   "--format": "png (default) | jpeg | webp (webp needs --backend chrome)",
   "--json": "Emit a single JSON document on stdout, nothing else",
@@ -1384,6 +2304,76 @@ function printCrawlHuman(r: any) {
     const why = d.blockedBy ? `blocked by ${d.blockedBy}` : "no handler fired";
     const label = d.text ? dim(` ${JSON.stringify(d.text)}`) : "";
     console.log(`    ${red("✗")} ${String(d.ref).padEnd(w)}${label}  ${yellow(why)}`);
+  }
+  console.log();
+}
+
+function printScrollHuman(r: any) {
+  console.log(`${bold(r.url)}\n`);
+  const bottom = r.reachedBottom ? "reached bottom" : dim("stopped early");
+  console.log(`  page ${bold(r.pageHeight + "px")} tall · viewport ${r.viewportHeight}px · ${r.steps} steps · ${bottom}`);
+  if (r.lazyLoaded) {
+    console.log(`  ${yellow("lazy-loaded")} — grew ${r.pageHeight - r.initialPageHeight}px while scrolling`);
+  }
+  if (r.sticky.length) {
+    console.log(`  ${cyan("pinned")}: ${r.sticky.map((s: any) => `${s.ref} (${s.position}, ${s.height}px)`).join(", ")}`);
+  }
+  if (r.outline.length) {
+    console.log(`\n  ${bold("outline")}`);
+    for (const h of r.outline.slice(0, 25)) {
+      const indent = "  ".repeat(Math.max(0, (h.level ?? 3) - 1));
+      console.log(`    ${dim(String(h.documentY).padStart(6))}  ${indent}${h.text}`);
+    }
+    if (r.outline.length > 25) console.log(dim(`    … ${r.outline.length - 25} more`));
+  }
+  console.log(`\n  ${bold(r.elementCount)} interactive elements across the page${r.truncated ? dim(` (${r.truncated} beyond the cap)`) : ""}\n`);
+}
+
+function printInteractHuman(r: any) {
+  console.log(`${bold(r.url)}\n`);
+  console.log(`  ${r.controlsTested} of ${r.controlsFound} controls exercised`);
+  console.log(`  ${green("✓")} ${r.alive} responded`);
+  if (r.dead.length) console.log(`  ${red("✗")} ${r.dead.length} dead`);
+  if (r.rejectedInput.length) console.log(`  ${yellow("!")} ${r.rejectedInput.length} dropped the input they were given`);
+  if (r.skipped.length) {
+    const by: Record<string, number> = {};
+    for (const s of r.skipped) by[s.reason] = (by[s.reason] ?? 0) + 1;
+    console.log(`  ${dim("⊘")} ${r.skipped.length} skipped ${dim(`(${Object.entries(by).map(([k, v]) => `${v} ${k}`).join(", ")})`)}`);
+  }
+  if (r.dead.length || r.rejectedInput.length) console.log();
+  for (const d of r.dead) {
+    const why = d.blockedBy ? `blocked by ${d.blockedBy}` : "no handler fired";
+    console.log(`    ${red("✗")} ${String(d.ref).padEnd(22)} ${yellow(why)}`);
+  }
+  for (const f of r.rejectedInput) {
+    console.log(`    ${yellow("!")} ${String(f.ref).padEnd(22)} typed ${JSON.stringify(f.typed)} → ${JSON.stringify(f.value)}`);
+  }
+  if (r.consoleErrorsTriggered.length) {
+    console.log(`\n  ${bold("console errors triggered")}`);
+    for (const e of r.consoleErrorsTriggered.slice(0, 5)) console.log(`    ${red("✗")} ${e}`);
+  }
+  console.log();
+}
+
+function printStressHuman(r: any) {
+  console.log(`${bold(r.url)}\n`);
+  if (!r.scenarios.length) {
+    console.log(dim(`  ${r.note ?? "nothing to stress"}\n`));
+    return;
+  }
+  const verdict = r.totalErrors === 0 && r.survived ? green("held up") : red("broke");
+  console.log(`  ${r.scenariosRun}/${r.scenarios.length} scenarios ran · ${r.totalErrors} errors triggered · page ${verdict}`);
+  if (r.scenariosFailedToRun) console.log(`  ${yellow(`${r.scenariosFailedToRun} scenario(s) could not run`)}`);
+  console.log(dim(`  targets: ${r.targetsUsed.join(", ")}\n`));
+  for (const s of r.scenarios) {
+    const bad = s.errorsTriggered > 0 || !s.pageResponsive;
+    const mark = s.ran === false ? yellow("–") : bad ? red("✗") : green("✓");
+    console.log(`    ${mark} ${String(s.name).padEnd(24)} ${dim(String(s.target ?? ""))}${
+      s.ran === false ? "  " + yellow("did not run: " + String(s.threw).slice(0, 60)) : ""
+    }${
+      s.errorsTriggered ? "  " + yellow(`${s.errorsTriggered} error${s.errorsTriggered === 1 ? "" : "s"}`) : ""
+    }${s.pageResponsive ? "" : "  " + red("page stopped responding")}`);
+    for (const e of (s.errors ?? []).slice(0, 3)) console.log(`        ${dim(e.slice(0, 100))}`);
   }
   console.log();
 }
@@ -1557,6 +2547,32 @@ async function runCli(argv: string[]): Promise<number> {
         if (json) console.log(JSON.stringify(r));
         else printAuditHuman(r);
         return r.success ? EXIT.ok : EXIT.problems;
+      }
+      case "scroll": {
+        const r = await engine.scrollScan({
+          maxSteps: num(p.flags, "max-steps", 20),
+          settleMs: num(p.flags, "settle", 120),
+        });
+        if (json) console.log(JSON.stringify(r));
+        else printScrollHuman(r);
+        return EXIT.ok;
+      }
+      case "interact": {
+        const r = await engine.interact({
+          maxControls: num(p.flags, "max-controls", 60),
+          dwellMs: num(p.flags, "dwell", 400),
+          fillFields: !p.flags.has("no-fill"),
+          includeDestructive: p.flags.has("include-destructive"),
+        });
+        if (json) console.log(JSON.stringify(r));
+        else printInteractHuman(r);
+        return r.dead.length || r.rejectedInput.length ? EXIT.problems : EXIT.ok;
+      }
+      case "stress": {
+        const r = await engine.stressTest({ maxTargets: num(p.flags, "targets", 5) });
+        if (json) console.log(JSON.stringify(r));
+        else printStressHuman(r);
+        return r.totalErrors > 0 || !r.survived ? EXIT.problems : EXIT.ok;
       }
       case "crawl": {
         const r = await engine.crawl({ max: num(p.flags, "max", 20), dwellMs: num(p.flags, "dwell", 700) });

@@ -182,11 +182,67 @@ flamingo <command> [url] [options]
   crawl <url>         Click every control and report the dead ones
   tree <url>          Actionable elements with click-ready coordinates
   responsive <url>    Horizontal-overflow audit across viewports
+  scroll <url>        Scroll the whole page and map everything on it
+  interact <url>      Scroll the page and exercise every control on it
+  stress <url>        Try to break the page with hostile interaction patterns
   shot <url>          Screenshot the viewport to a file
   serve               Run the MCP server on stdio
   doctor              Check the environment and report what works here
   schema              Print the machine-readable API description as JSON
 ```
+
+### Beyond one viewport
+
+`tree` and `crawl` see only the current viewport, honestly — anything below the
+fold is invisible. `scroll` walks the page in overlapping steps and merges what it
+finds into document-space coordinates:
+
+```
+  page 3596px tall · viewport 800px · 6 steps · reached bottom
+  lazy-loaded — grew 648px while scrolling
+  pinned: header#topnav (fixed, 56px)
+
+  outline
+        99  Welcome
+       745    Features
+      1493    Pricing
+      2241    Contact
+```
+
+`interact` then exercises the whole page rather than one screen — clicking
+controls and *typing into fields* to check they accept input, not merely focus:
+
+```
+  13 of 14 controls exercised
+  ✓ 7 responded
+  ✗ 3 dead
+  ! 1 dropped the input they were given
+  ⊘ 1 skipped (1 destructive-label)
+
+    ✗ button#deadcta         no handler fired
+    ! input#zip              typed "flamingo test" → ""
+```
+
+Controls whose label reads destructive (`delete`, `log out`, `revoke`…) are
+skipped by default and reported as skipped — pointing this at a real admin panel
+should not delete anything. `--include-destructive` overrides it.
+
+### Breaking things on purpose
+
+Real users double-click, refresh halfway through a request and navigate away
+mid-action. That is where unhandled rejections and torn state live, and a single
+click never finds them. `stress` runs a fixed, reproducible sequence of those
+patterns against every live control:
+
+```
+  36/36 scenarios ran · 4 errors triggered · page broke
+
+    ✗ rapid-click              button#busy  4 errors
+        [unhandled rejection] Error: re-entrant submit while a request is in flight
+```
+
+That bug is invisible to `crawl` — one click on `#busy` is perfectly healthy.
+Nothing here is random, so a finding reproduces exactly.
 
 Key options: `--json`, `--backend webkit|chrome`, `--width`/`--height`,
 `--viewports 1920x1080,375x812`, `--max`, `--settle`, `--out`, `--no-color`.
@@ -236,8 +292,11 @@ const report = await e.compileHealthReport();
 | `pressKey({ key, modifiers })` | `"Enter"`, `"Tab"`, chords |
 | `hoverCoordinate({ x, y })` | **chrome only** |
 | `scroll({ dx, dy })` / `({ selector })` | |
-| `detectDeadClicks({ x, y, timeoutMs })` | DOM + console + navigation + focus + network |
-| `crawl({ max, dwellMs })` | Click every control; report the dead ones and why |
+| `detectDeadClicks({ x, y, timeoutMs })` | DOM, console, navigation, focus, dialogs, SPA routing, network |
+| `crawl({ max, dwellMs })` | Click every control in view; report the dead ones and why |
+| `scrollScan({ maxSteps })` | Whole-page map: elements, outline, sticky, lazy-load |
+| `interact({ maxControls })` | Exercise the whole page, typing into fields |
+| `stressTest({ maxTargets })` | Hostile interaction patterns; reports errors triggered |
 | `captureRuntimeLogs()` | Includes load-time errors |
 | `interceptTraffic()` | **chrome only** |
 | `scanBrokenAssets()` | Status codes on chrome only |
@@ -274,6 +333,21 @@ The three CDP-dependent APIs throw an error naming the fix when called on
 `registeredNetworkRequests: null` rather than `0` on webkit, so a signal that was
 never measured is never mistaken for a measured zero.
 
+## Speed
+
+Detection is signal-driven rather than timed: a click is watched for DOM
+mutations, focus, dialogs, navigation, SPA routing and network activity, and
+resolves the moment any of them fires.
+
+| | before | now |
+| :-- | --: | --: |
+| `detectDeadClicks`, live control | 1005ms | **4ms** |
+| `crawl`, 40 controls | 28.5s | **6.0s** |
+| `getInteractiveTree`, 3000-element page | — | **115ms** |
+
+Proving a control is *dead* still costs the full window — absence cannot be
+observed early — which is why `--dwell` exists.
+
 ## Things that will bite you (handled here)
 
 - **Coordinates are CSS-space; screenshots are not.** On a retina display the PNG
@@ -287,6 +361,24 @@ never measured is never mistaken for a measured zero.
   document replacement. `detectDeadClicks` installs a `MutationObserver` first.
 - **Console and network capture cannot be lazy.** Both are enabled before the
   first navigation, or load-time failures — the ones that matter — are gone.
+- **Clicking a `<select>` hangs the renderer.** The native popup blocks until a
+  human dismisses it, and nothing automated can. Selects are flagged and read
+  without clicking. A watchdog rebuilds the view if any other page blocks it.
+- **A navigation that never completes poisons the view permanently.** Every later
+  navigate throws `ERR_INVALID_STATE`, and neither `reload()` nor anything else
+  clears it. `goto` times out and the next one rebuilds, so one hung link cannot
+  kill a whole crawl.
+- **Uncaught errors never reach the console hook.** `Bun.WebView`'s `console`
+  option only sees explicit `console.*` calls, so a real `throw` is invisible.
+  Error and `unhandledrejection` listeners are injected to forward them.
+- **Shadow DOM is not optional.** Every built-in form control and most component
+  libraries hide their real controls behind a shadow root that `querySelectorAll`
+  cannot see. The element walk and the hit test both pierce it.
+- **`history.pushState` fires no load event**, so SPA route changes are invisible
+  to navigation tracking. The URL is compared instead.
+- **A half-scrolled element has a different clipped centre at every scroll
+  offset.** Identity comes from the unclipped document position, or the same
+  control gets recorded — and tested — several times.
 - **A click that only moves focus is not dead.** Clicking a text field focuses
   it and changes nothing else; counting that as dead flags every input on the
   page. Focus landing on a *button*, though, proves nothing — buttons take focus
@@ -295,7 +387,7 @@ never measured is never mistaken for a measured zero.
 ## Tests
 
 ```bash
-bun test          # 64 tests against a real browser and a real fixture server
+bun test          # 87 tests against a real browser and a real fixture server
 bun run typecheck
 ```
 

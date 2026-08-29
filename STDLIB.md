@@ -163,4 +163,18 @@ and `tsc` is invoked via `bunx` without being installed into the project.
 - **`Bun.Image`'s `.width`/`.height` getters return `-1`**; `await .metadata()` is
   the real source.
 
+- **A `<select>` click blocks the renderer forever.** The native popup waits for
+  a human. Found by a `interact` run that never returned; now every `<select>` is
+  flagged and read without clicking, with a watchdog that rebuilds the view if
+  anything else blocks it.
+- **A hung navigation poisons the view permanently.** After one timeout, every
+  later `navigate()` throws `ERR_INVALID_STATE`; `reload()` does not clear it.
+  Only rebuilding does.
+- **`Bun.WebView`'s `console` option does not see uncaught errors** or unhandled
+  rejections — only explicit `console.*` calls. A test tool that cannot see a
+  `throw` is not a test tool, so error listeners are injected to forward them.
+- **Bun 1.4.0 ships types that disagree with its runtime**: `bun.d.ts` declares
+  `back()` and `forward()` on `WebView`, but the runtime only implements
+  `goBack()` and `goForward()`. Calling the documented name throws.
+
 Each of these is documented as a comment at the exact site in `flamingo.ts`.

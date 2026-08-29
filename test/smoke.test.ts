@@ -9,10 +9,7 @@ beforeAll(() => {
   server = serveFixture();
   url = `http://127.0.0.1:${server.port}/`;
 });
-afterAll(() => {
-  server.stop(true);
-  Bun.WebView.closeAll();
-});
+afterAll(() => server.stop(true));
 
 // Every API that does not need CDP must behave identically on both backends.
 for (const backend of ["webkit", "chrome"] as const) {
@@ -51,8 +48,8 @@ for (const backend of ["webkit", "chrome"] as const) {
 
     test("tree centers are usable click coordinates", async () => {
       const { interactiveElements } = await e.getInteractiveTree();
-      const live = interactiveElements.find((i: any) => i.ref === "button#live");
-      expect(live.center).toEqual({ x: 60, y: 30 });
+      const live = interactiveElements.find((i) => i.ref === "button#live");
+      expect(live!.center).toEqual({ x: 60, y: 30 });
     });
 
     test("detectPointerBlocker names the backdrop covering #under", async () => {
