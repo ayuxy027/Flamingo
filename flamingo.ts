@@ -562,7 +562,7 @@ export function renderObservation(o: Observation): string {
   if (o.frames) lines.push(`frames ${o.frames} (contents unreachable)`);
   for (const e of o.newErrors) lines.push(`error ${e.split("\n")[0]!.slice(0, 160)}`);
   for (const r of o.newFailedRequests) lines.push(`request-failed ${r.status ?? r.errorReason} ${r.url}`);
-  lines.push(`changed ${o.changed}${o.changed ? "" : "  (last action did nothing — try something else)"}`);
+  lines.push(`changed ${o.changed}${o.changed ? "" : "  (last action did nothing; try something else)"}`);
   if (o.loading) lines.push("loading true");
   return lines.join("\n");
 }
@@ -731,7 +731,7 @@ export class Engine {
   private requireChrome(api: string): void {
     if (this.backend === "chrome") return;
     throw new Error(
-      `${api}() requires backend: "chrome" — CDP is unavailable on the webkit backend. ` +
+      `${api}() requires backend: "chrome". CDP is unavailable on the webkit backend. ` +
         `Construct with Engine.open({ backend: "chrome" }). Only ${CHROME_ONLY} need it; ` +
         `every other API works on webkit.`,
     );
@@ -1689,7 +1689,7 @@ const TOOLS: Record<string, Tool> = {
   observe: {
     compactable: true,
     description:
-      "One step of the agent loop: current url and title, the actionable elements with click-ready coordinates, what is covering anything unreachable, plus the console errors and failed requests SINCE THE LAST observe, and a `changed` flag that is false when nothing moved. Call this first, act, then read the observation returned by the action. `changed: false` after an action means the action achieved nothing — try something else rather than repeating it.",
+      "One step of the agent loop: current url and title, the actionable elements with click-ready coordinates, what is covering anything unreachable, plus the console errors and failed requests SINCE THE LAST observe, and a `changed` flag that is false when nothing moved. Call this first, act, then read the observation returned by the action. `changed: false` after an action means the action achieved nothing. Try something else rather than repeating it.",
     inputSchema: {
       type: "object",
       properties: { maxElements: numSchema, format: { enum: ["compact", "json"] } },
@@ -1698,7 +1698,7 @@ const TOOLS: Record<string, Tool> = {
   },
   getInteractiveTree: {
     description:
-      "Compact list of every element that can actually be acted on, with click-ready CSS-space centre coordinates. Filtered to the viewport and to elements that are not occluded, so it stays small on large pages. Also reports blockedBy — what is covering the unreachable controls, which is how you spot a cookie wall or modal that must be dismissed first. Start here to decide what to click.",
+      "Compact list of every element that can actually be acted on, with click-ready CSS-space centre coordinates. Filtered to the viewport and to elements that are not occluded, so it stays small on large pages. Also reports blockedBy, naming what covers the unreachable controls, which is how you spot a cookie wall or modal that must be dismissed first. Start here to decide what to click.",
     inputSchema: { type: "object", properties: { max: numSchema } },
     run: (e, a) => e.getInteractiveTree(a),
   },
@@ -1759,7 +1759,7 @@ const TOOLS: Record<string, Tool> = {
   },
   crawl: {
     description:
-      "Click every actionable control on the page and report which ones do nothing, and why — swallowed by an overlay, or no handler fired at all. The fastest way to find broken buttons across a page.",
+      "Click every actionable control on the page and report which ones do nothing, and why: swallowed by an overlay, or no handler fired at all. The fastest way to find broken buttons across a page.",
     inputSchema: { type: "object", properties: { max: numSchema, dwellMs: numSchema } },
     run: (e, a) => e.crawl(a),
   },
@@ -1774,7 +1774,7 @@ const TOOLS: Record<string, Tool> = {
   },
   waitForGone: {
     description:
-      "Wait until an element matching a selector and/or text is gone — a loading spinner, a modal, a toast. Complements waitFor.",
+      "Wait until an element matching a selector and/or text is gone: a loading spinner, a modal, a toast. Complements waitFor.",
     inputSchema: {
       type: "object",
       properties: { selector: strSchema, textContains: strSchema, timeoutMs: numSchema },
@@ -1816,7 +1816,7 @@ const TOOLS: Record<string, Tool> = {
   },
   stressTest: {
     description:
-      "Run a fixed sequence of hostile interaction patterns — rapid clicks, double clicks, reload mid-action, navigate away mid-action, resize and scroll mid-action, interleaved clicks — and report the console errors each triggers. Finds race conditions ordinary testing misses. Deterministic and reproducible.",
+      "Run a fixed sequence of hostile interaction patterns (rapid clicks, double clicks, reload mid-action, navigate away mid-action, resize and scroll mid-action, interleaved clicks) and report the console errors each triggers. Finds race conditions ordinary testing misses. Deterministic and reproducible.",
     inputSchema: { type: "object", properties: { maxTargets: numSchema, settleMs: numSchema } },
     run: (e, a) => e.stressTest(a),
   },
@@ -1850,7 +1850,7 @@ const TOOLS: Record<string, Tool> = {
   },
   captureViewport: {
     description:
-      "Screenshot the viewport to a file. Returns the path plus cssSize, pixelSize and deviceScaleFactor — image pixels are scaled by that factor, while all click coordinates are CSS-space. Set base64 only if you need the bytes inline; they are large.",
+      "Screenshot the viewport to a file. Returns the path plus cssSize, pixelSize and deviceScaleFactor. Image pixels are scaled by that factor, while all click coordinates are CSS-space. Set base64 only if you need the bytes inline; they are large.",
     inputSchema: {
       type: "object",
       properties: { format: { enum: ["png", "jpeg", "webp"] }, quality: numSchema, path: strSchema, base64: boolSchema },
@@ -2081,7 +2081,7 @@ const MCP_SERVER_KEY = "flamingo";
 export const MCP_INSTRUCTIONS = `flamingo drives a real browser in a loop: observe, act, observe.
 
 Call \`observe\` to see where you are. Then act (clickCoordinate, typeInput, pressKey,
-scroll) — every acting tool returns a fresh observation in its result, so you do not
+scroll). Every acting tool returns a fresh observation in its result, so you do not
 need to call observe again after acting.
 
 An acting tool's result is two parts: the action's own JSON on the first line, then a
@@ -2096,19 +2096,19 @@ format:"json" if you need the structured form.
 In an observation:
 - element lines are the only genuinely clickable things: on screen, visible, not
   covered. Use the leading (x,y) directly as click coordinates.
-- \`changed: false\` means your last action did nothing. Do not repeat it — try a
+- \`changed: false\` means your last action did nothing. Do not repeat it. Try a
   different element, scroll, or look at \`blockedBy\`.
 - \`blockedBy\` names what is covering the page (a cookie wall, a modal). Dismiss it
   first; anything behind it is unreachable.
 - \`newErrors\` are console errors and uncaught exceptions since your last look.
 
 Coordinates are CSS pixels from the latest observation. Never read coordinates off a
-screenshot — those are device pixels, 2x on retina.
+screenshot; those are device pixels, 2x on retina.
 
 After starting async work use \`waitFor\` / \`waitForGone\` rather than sleeping.
 \`observe\` covers the current viewport only; \`scrollScan\` maps the whole page.
 
-Never click an element marked \`nativePicker\` (a <select>) — the native popup blocks
+Never click an element marked \`nativePicker\` (a <select>). The native popup blocks
 the browser. Elements marked \`leavesPage\` navigate away from the page under test.
 Destructive-looking controls are skipped by the sweep tools and confirm() is answered
 "no"; click one deliberately by coordinate if you really mean to.
@@ -2176,7 +2176,7 @@ const COMMANDS: Record<string, CommandSpec> = {
     args: "<url>",
     summary: "Scroll the whole page and map everything on it",
     detail:
-      "One viewport is a keyhole — anything below the fold is invisible. This walks\n" +
+      "One viewport is a keyhole: anything below the fold is invisible. This walks\n" +
       "the page in overlapping steps and merges what it finds into document-space\n" +
       "coordinates, so every control can be reached later with scrollTo. It also\n" +
       "reports the heading outline, what is pinned over the content, and whether the\n" +
@@ -2206,7 +2206,7 @@ const COMMANDS: Record<string, CommandSpec> = {
     summary: "Try to break the page with hostile interaction patterns",
     detail:
       "Real users double-click, refresh halfway through a request, navigate away\n" +
-      "mid-action and scroll while something is loading — which is where unhandled\n" +
+      "mid-action and scroll while something is loading, which is where unhandled\n" +
       "rejections and torn state actually live. Runs a fixed sequence of those\n" +
       "patterns and reports the console errors each one triggers. Nothing is random,\n" +
       "so any failure reproduces exactly.",
@@ -2304,7 +2304,7 @@ function buildUsage(): string {
   const commandRows = Object.entries(COMMANDS).map(
     ([name, c]) => [`${name} ${c.args}`.trim(), c.summary] as [string, string],
   );
-  return `flamingo ${VERSION} — ${TAGLINE}
+  return `flamingo ${VERSION} - ${TAGLINE}
 
 USAGE
   flamingo <command> [url] [options]
@@ -2336,7 +2336,7 @@ function commandHelp(name: string): string {
     const g = GLOBAL_FLAGS.find(([l]) => l.startsWith(f.split(" ")[0]!));
     return [f, g ? g[1] : LOCAL_FLAG_HELP[f.split(" ")[0]!] ?? ""] as [string, string];
   });
-  return `flamingo ${name} ${c.args}`.trim() + ` — ${c.summary}
+  return `flamingo ${name} ${c.args}`.trim() + ` - ${c.summary}
 
 DESCRIPTION
 ${c.detail
@@ -2478,7 +2478,7 @@ function printAuditHuman(r: any) {
   if (d.overflowLayouts) {
     console.log(`  ${bold("layout overflow")} ${dim(`(${d.overflowLayouts})`)}`);
     for (const v of r.errors.responsive) {
-      const worst = v.offenders[0] ? ` — ${v.offenders[0].elementSelector}` : "";
+      const worst = v.offenders[0] ? `: ${v.offenders[0].elementSelector}` : "";
       console.log(`    ${red("✗")} ${v.viewport} overflows by ${v.overflowWidth}px${worst}`);
     }
   }
@@ -2495,7 +2495,7 @@ function printCrawlHuman(r: any) {
   console.log(`  ${r.controlsFound} control${r.controlsFound === 1 ? "" : "s"} found, ${r.controlsTested} tested${skipNote}`);
   console.log(`  ${green("✓")} ${r.alive} responded`);
   for (const b of r.blockedBy ?? []) {
-    console.log(`  ${yellow("blocked")} ${b.count} control${b.count === 1 ? "" : "s"} behind ${bold(b.ref)} — untestable until it is dismissed`);
+    console.log(`  ${yellow("blocked")} ${b.count} control${b.count === 1 ? "" : "s"} behind ${bold(b.ref)}, untestable until it is dismissed`);
   }
   if (!r.dead.length) {
     console.log(green("\n✓ every control is wired up\n"));
@@ -2516,7 +2516,7 @@ function printScrollHuman(r: any) {
   const bottom = r.reachedBottom ? "reached bottom" : dim("stopped early");
   console.log(`  page ${bold(r.pageHeight + "px")} tall · viewport ${r.viewportHeight}px · ${r.steps} steps · ${bottom}`);
   if (r.lazyLoaded) {
-    console.log(`  ${yellow("lazy-loaded")} — grew ${r.pageHeight - r.initialPageHeight}px while scrolling`);
+    console.log(`  ${yellow("lazy-loaded")}: grew ${r.pageHeight - r.initialPageHeight}px while scrolling`);
   }
   if (r.sticky.length) {
     console.log(`  ${cyan("pinned")}: ${r.sticky.map((s: any) => `${s.ref} (${s.position}, ${s.height}px)`).join(", ")}`);
@@ -2530,7 +2530,7 @@ function printScrollHuman(r: any) {
       const indent = "  ".repeat(Math.max(0, (h.level ?? 3) - 1));
       console.log(`    ${dim(String(h.documentY).padStart(6))}  ${indent}${h.text}`);
     }
-    if (r.outline.length > 25) console.log(dim(`    … ${r.outline.length - 25} more`));
+    if (r.outline.length > 25) console.log(dim(`    ... ${r.outline.length - 25} more`));
   }
   console.log(`\n  ${bold(r.elementCount)} interactive elements across the page${r.truncated ? dim(` (${r.truncated} beyond the cap)`) : ""}\n`);
 }
@@ -2592,7 +2592,7 @@ function printTreeHuman(r: any) {
       console.log(`  ${yellow("blocked")} ${b.count} control${b.count === 1 ? "" : "s"} behind ${bold(b.ref)}`);
     }
   }
-  if (r.frames?.length) console.log(dim(`  ${r.frames.length} iframe(s) present — their contents are not reachable`));
+  if (r.frames?.length) console.log(dim(`  ${r.frames.length} iframe(s) present; their contents are not reachable`));
   console.log();
   for (const el of r.interactiveElements) {
     const text = el.text ? ` ${JSON.stringify(el.text)}` : "";
@@ -2628,12 +2628,12 @@ function runDoctor(json: boolean): number {
     backends: {
       webkit: {
         available: isMac,
-        detail: isMac ? "system WebKit — no browser install needed" : "macOS only; use --backend chrome",
+        detail: isMac ? "system WebKit, no browser install needed" : "macOS only; use --backend chrome",
       },
       chrome: {
         available: chromePath !== null,
         path: chromePath,
-        detail: chromePath ? "found" : "no Chrome/Chromium/Brave found — set BUN_CHROME_PATH",
+        detail: chromePath ? "found" : "no Chrome/Chromium/Brave found; set BUN_CHROME_PATH",
       },
     },
     ok,
@@ -2645,12 +2645,12 @@ function runDoctor(json: boolean): number {
   }
 
   const mark = (b: boolean) => (b ? green("✓") : red("✗"));
-  console.log(`${bold(`flamingo ${VERSION}`)} ${dim("— " + TAGLINE)}\n`);
+  console.log(`${bold(`flamingo ${VERSION}`)} ${dim("- " + TAGLINE)}\n`);
   console.log(`  ${mark(bunOk)} ${"bun".padEnd(9)} ${Bun.version} ${dim(`(requires ${required})`)}`);
   console.log(`    ${"platform".padEnd(9)} ${process.platform} ${process.arch}`);
   console.log(`  ${mark(isMac)} ${"webkit".padEnd(9)} ${report.backends.webkit.detail}`);
   console.log(`  ${mark(chromePath !== null)} ${"chrome".padEnd(9)} ${chromePath ?? report.backends.chrome.detail}`);
-  console.log(ok ? green("\n✓ ready\n") : red("\n✗ not usable here — see above\n"));
+  console.log(ok ? green("\n✓ ready\n") : red("\n✗ not usable here; see above\n"));
   return ok ? EXIT.ok : EXIT.problems;
 }
 
@@ -2715,7 +2715,7 @@ async function runInit(p: Parsed, json: boolean): Promise<number> {
     }
     config.mcpServers ??= {};
     if (config.mcpServers[MCP_SERVER_KEY] && !force) {
-      actions.push({ path: mcpPath, action: "kept", detail: "already configured — pass --force to overwrite" });
+      actions.push({ path: mcpPath, action: "kept", detail: "already configured; pass --force to overwrite" });
     } else {
       config.mcpServers[MCP_SERVER_KEY] = { command, args };
       writeFileSync(mcpPath, JSON.stringify(config, null, 2) + "\n");
@@ -2728,7 +2728,7 @@ async function runInit(p: Parsed, json: boolean): Promise<number> {
     const skillPath = join(skillDir, "SKILL.md");
     const skillExisted = existsSync(skillPath);
     if (skillExisted && !force) {
-      actions.push({ path: skillPath, action: "kept", detail: "already present — pass --force to overwrite" });
+      actions.push({ path: skillPath, action: "kept", detail: "already present; pass --force to overwrite" });
     } else {
       mkdirSync(skillDir, { recursive: true });
       writeFileSync(skillPath, SKILL_MD);
@@ -2752,7 +2752,7 @@ async function runInit(p: Parsed, json: boolean): Promise<number> {
     return EXIT.ok;
   }
 
-  console.log(`${bold("flamingo")} ${dim(VERSION)} — wired into ${bold(root)}\n`);
+  console.log(`${bold("flamingo")} ${dim(VERSION)} wired into ${bold(root)}\n`);
   for (const a of actions) {
     const mark = a.action === "kept" ? dim("·") : green("✓");
     console.log(`  ${mark} ${a.action.padEnd(8)} ${a.path.replace(root + "/", "")}${a.detail ? dim(`  ${a.detail}`) : ""}`);
@@ -2812,7 +2812,7 @@ async function runCli(argv: string[]): Promise<number> {
 
   let engine: Engine | undefined;
   try {
-    if (!json) process.stderr.write(dim(`launching ${backend}…\n`));
+    if (!json) process.stderr.write(dim(`launching ${backend}...\n`));
     engine = await Engine.open({ ...engineOpts, url });
   } catch (e: any) {
     process.stderr.write(red(`✗ ${e?.message ?? e}\n`));

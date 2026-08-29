@@ -58,7 +58,7 @@ To guarantee absolute compliance with the zero-dependency challenge, the engine 
 | Legacy NPM Package | Native Substitution | Implementation Strategy |
 | :--- | :--- | :--- |
 | `puppeteer` / `playwright` | `Bun.spawn` + `WebSocket` | Spawn local Chrome binary; communicate via raw WebSocket JSON-RPC over CDP. |
-| `globby` / `fast-glob` | `import { glob } from "bun"` | Leverage Bun’s native fast-glob engine for scanning directories. |
+| `globby` / `fast-glob` | `import { glob } from "bun"` | Leverage Bun's native fast-glob engine for scanning directories. |
 | `chalk` / `picocolors` | ANSI Escape Sequences | Use direct string formatting (e.g., `\x1b[31m` for red text). |
 | `yargs` / `commander` | Manual Argument Parser | Loop through `Bun.argv` using a custom, lightweight state machine. |
 | `dotenv` | `Bun.env` | Use Bun's native parsing of local `.env` files. |

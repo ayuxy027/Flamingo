@@ -1,11 +1,11 @@
-# STDLIB.md — packages replaced with the standard library
+# STDLIB.md: packages replaced with the standard library
 
-**Track A — Developer Tools & CLI.** Runtime: Bun ≥ 1.4.
-**Shipped as:** a library, a CLI, and an MCP server for AI agents — one source file.
+**Track A: Developer Tools & CLI.** Runtime: Bun ≥ 1.4.
+**Shipped as:** a library, a CLI, and an MCP server for AI agents, all in one source file.
 **Runtime dependency count: 0.** `dependencies`, `peerDependencies`,
 `optionalDependencies` and `bundledDependencies` are all empty.
 
-Verify mechanically — this exits non-zero if any claim below stops being true:
+Verify mechanically. This exits non-zero if any claim below stops being true:
 
 ```bash
 bun run scripts/dependency-proof.ts
@@ -23,11 +23,11 @@ Seventeen packages we would otherwise have installed, and what replaced each.
 
 | # | Normally | Instead | Where |
 | :-- | :-- | :-- | :-- |
-| 1 | `puppeteer` / `playwright` | `Bun.WebView` — navigate, click, type, press, scroll, screenshot, evaluate, and raw `cdp()` | §2 `Engine` |
+| 1 | `puppeteer` / `playwright` | `Bun.WebView`: navigate, click, type, press, scroll, screenshot, evaluate, and raw `cdp()` | §2 `Engine` |
 | 2 | `@modelcontextprotocol/sdk` | Hand-written JSON-RPC 2.0 over stdio: `Bun.stdin.stream()` + `TextDecoder` + newline framing | §3 `runMcpServer` |
-| 3 | `yargs` / `commander` / `minimist` | `parseArgs()` — a loop over `Bun.argv` handling `--flag value`, `--flag=value`, bare booleans, `-h`/`-v` | §4 |
-| 4 | `chalk` / `picocolors` / `kleur` | `paint()` — raw ANSI SGR escapes, auto-disabled when not a TTY, on `NO_COLOR`, or under `--json` | §4 |
-| 5 | `jest` / `vitest` / `mocha`+`chai` | `bun:test` — `test`, `expect`, `describe`, lifecycle hooks | `test/*.test.ts` |
+| 3 | `yargs` / `commander` / `minimist` | `parseArgs()`: a loop over `Bun.argv` handling `--flag value`, `--flag=value`, bare booleans, `-h`/`-v` | §4 |
+| 4 | `chalk` / `picocolors` / `kleur` | `paint()`: raw ANSI SGR escapes, auto-disabled when not a TTY, on `NO_COLOR`, or under `--json` | §4 |
+| 5 | `jest` / `vitest` / `mocha`+`chai` | `bun:test`: `test`, `expect`, `describe`, lifecycle hooks | `test/*.test.ts` |
 | 6 | `express` / `fastify` | `Bun.serve()` for the fixture server the tests drive | `test/fixture.ts` |
 | 7 | `image-size` / `probe-image-size` / `sharp` | `new Bun.Image(buf).metadata()` for PNG dimensions | §2 `captureViewport` |
 | 8 | `fs-extra` / `mkdirp` | `mkdirSync(dir, { recursive: true })` from `node:fs` | §2 `captureViewport` |
@@ -35,7 +35,7 @@ Seventeen packages we would otherwise have installed, and what replaced each.
 | 10 | `which` / `locate-path` | `existsSync()` probe across a candidate list to find Chrome/Chromium/Brave | §2 `CHROME_CANDIDATES` |
 | 11 | `execa` / `cross-spawn` | `Bun.spawn()` to drive the CLI and MCP server as real subprocesses under test | `test/cli.test.ts` |
 | 12 | `supertest` / `node-fetch` | `new Response(proc.stdout).text()` to read subprocess output as a stream | `test/cli.test.ts` |
-| 13 | `get-port` / `portfinder` | `Bun.serve({ port: 0 })` then read `server.port` — no probe-then-race | `test/fixture.ts` |
+| 13 | `get-port` / `portfinder` | `Bun.serve({ port: 0 })` then read `server.port`, with no probe-then-race | `test/fixture.ts` |
 | 14 | `ts-node` / `tsx` | Bun executes TypeScript directly; no transpile step, no config | everywhere |
 | 15 | `pkg` / `nexe` / `esbuild` | `bun build --compile` for the single self-contained binary | `bun run build` |
 | 16 | `hasha` / `crypto-hash` | `new Bun.CryptoHasher("sha256")` for the reproducible-build digests | `scripts/verify-reproducible.ts` |
@@ -83,7 +83,7 @@ count.
 "only the standard library of the chosen language." `Bun.WebView` is in Bun's
 standard library, the same as `Bun.serve` or `node:fs`. Hand-rolling a CDP client
 would also have used only the standard library (`Bun.spawn` + `WebSocket`), so it
-would not have been *more* compliant — just longer. Preferring the platform
+would not have been *more* compliant, just longer. Preferring the platform
 primitive over a hand-rolled one is the judgement the rules ask for everywhere
 else; it does not stop being correct because the primitive is powerful.
 
@@ -95,9 +95,9 @@ navigate  evaluate  screenshot  cdp  addEventListener  click  type  press
 scroll    scrollTo  resize      close  url  title  onNavigated
 ```
 
-Fifteen methods, 22 call sites, roughly 40 lines. The remaining ~97% — the
+Fifteen methods, 22 call sites, roughly 40 lines. The remaining ~97%, namely the
 in-page programs, the viewport/occlusion filter, the buffering and correlation,
-dead-click detection, the crawler, the MCP protocol, the CLI — is ours. Bun
+dead-click detection, the crawler, the MCP protocol and the CLI, is ours. Bun
 supplies a *transport and an input device*. It does not supply an opinion about
 what an agent needs to see, which is the actual product.
 
@@ -107,9 +107,9 @@ are worth reporting, no occlusion filtering, no dead-click concept, no health
 report, and no MCP. Each of those is implemented here.
 
 Finally, the brief's own framing: *"prove that you understand what sits underneath
-them."* The four findings in the last section of this document — the missing
+them."* The four findings in the last section of this document, the missing
 keyboard barrier, the backend viewport disagreement, single-flight `evaluate`,
-the lying `Bun.Image` getters — are not things you learn by reading the docs. They
+the lying `Bun.Image` getters, are not things you learn by reading the docs. They
 are things you learn by driving the layer hard enough to hit its edges, and each
 one is fixed in the code with a comment at the site. That is the understanding the
 constraint was meant to produce.
@@ -127,7 +127,7 @@ A judge should ask this, so here is the answer up front.
 - **Opt-in `chrome` backend** spawns an already-installed Chrome/Chromium/Brave
   as an external process, the way a Git tool shells out to `git`. It is not a
   package, is not in any manifest, is not downloaded by us, and is never required
-  — 12 of the 15 APIs work without it.
+  12 of the 15 APIs work without it.
 
 The three that do need it (`interceptTraffic`, `hoverCoordinate`, and HTTP status
 codes in `scanBrokenAssets`) fail with an error naming the exact fix rather than
@@ -153,12 +153,12 @@ and `tsc` is invoked via `bunx` without being installed into the project.
 
 - **`Bun.WebView.evaluate()` allows one call in flight per view** and throws
   `ERR_INVALID_STATE` on a second. Playwright hides its serialization; here it is
-  explicit — every page call funnels through one promise chain.
+  explicit: every page call funnels through one promise chain.
 - **Keyboard dispatch has no completion barrier.** `press()` returns before
   WebContent has processed the key, so per-character typing needs an
   `evaluate()` after each key or characters arrive out of order (`"ab@c"` → `"a"`).
   A package would have papered over this; the substitution made us find and fix it.
-- **The two backends disagree on what `width`/`height` mean** — CSS viewport on
+- **The two backends disagree on what `width`/`height` mean**: CSS viewport on
   webkit, outer window on chrome, an ~81px difference. `Engine.open()` calls
   `resize()` to normalize, so the viewport you ask for is the one you get.
 - **`Bun.Image`'s `.width`/`.height` getters return `-1`**; `await .metadata()` is
@@ -172,19 +172,19 @@ and `tsc` is invoked via `bunx` without being installed into the project.
   later `navigate()` throws `ERR_INVALID_STATE`; `reload()` does not clear it.
   Only rebuilding does.
 - **`Bun.WebView`'s `console` option does not see uncaught errors** or unhandled
-  rejections — only explicit `console.*` calls. A test tool that cannot see a
+  rejections, only explicit `console.*` calls. A test tool that cannot see a
   `throw` is not a test tool, so error listeners are injected to forward them.
 - **Bun 1.4.0 ships types that disagree with its runtime**: `bun.d.ts` declares
   `back()` and `forward()` on `WebView`, but the runtime only implements
   `goBack()` and `goForward()`. Calling the documented name throws.
 - **`WebView.title` is populated asynchronously by the host**, so it is empty on
-  any page that takes a moment to settle — and non-empty on a fast one, which is
+  any page that takes a moment to settle, and non-empty on a fast one, which is
   worse, because it looks like it works. `document.title` is authoritative and
   costs nothing extra when an evaluate is already being made.
 - **`goBack()` on the chrome backend never resolves once history runs out**, and
   the pending navigation it leaves behind poisons the view exactly like a hung
-  `navigate()` does. Every navigation primitive here — `goto`, `goBack`,
-  `reload` — therefore runs under a deadline, and a timeout marks the view for
+  `navigate()` does. Every navigation primitive here (`goto`, `goBack`,
+  `reload`) therefore runs under a deadline, and a timeout marks the view for
   rebuild rather than wedging the process.
 
 Each of these is documented as a comment at the exact site in `flamingo.ts`.

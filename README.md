@@ -1,6 +1,6 @@
 # 🦩 flamingo
 
-**AI Native Frontend Testing Toolkit — a browser your agent drives in a loop.**
+**AI Native Frontend Testing Toolkit: a browser your agent drives in a loop.**
 
 One file. Zero runtime dependencies. Bun only. See [`STDLIB.md`](./STDLIB.md) for the proof.
 
@@ -31,8 +31,8 @@ bun add @ayuxy027/flamingo     # library / CLI
 
 `init` writes two things and nothing else:
 
-* `.mcp.json` — MCP server entry (merged, not overwritten)
-* `.claude/skills/flamingo/SKILL.md` — the loop, coordinates, gotchas
+* `.mcp.json`: MCP server entry (merged, not overwritten)
+* `.claude/skills/flamingo/SKILL.md`: the loop, coordinates, gotchas
 
 Restart your agent, ask it to *"check localhost:3000 for dead buttons"*.
 
@@ -55,21 +55,21 @@ while (!done(s)) {
   if (!btn) break;
   await e.clickCoordinate(btn.center);
   s = await e.observe();
-  if (!s.changed) break; // did nothing — try something else
+  if (!s.changed) break; // did nothing, try something else
 }
 ```
 
-`observe()` is tiny — only what's clickable, with coordinates. `changed`, `newErrors`, `newFailedRequests` are deltas since last time.
+`observe()` is tiny: only what's clickable, with coordinates. `changed`, `newErrors`, `newFailedRequests` are deltas since last time.
 
 ## CLI
 
 ```
-flamingo audit <url>       health report — console, broken assets, overflow
+flamingo audit <url>       health report: console, broken assets, overflow
 flamingo crawl <url>       click every control, report dead ones
 flamingo tree <url>        clickable elements + coordinates
 flamingo scroll <url>      walk the whole page, merged map
 flamingo interact <url>    scroll + click + type into fields
-flamingo stress <url>      hostile patterns — finds race conditions
+flamingo stress <url>      hostile patterns, finds race conditions
 flamingo responsive <url>  overflow across viewports
 flamingo shot <url>        screenshot
 flamingo doctor            env check
@@ -119,20 +119,20 @@ Your agent calls tools, not CLI. Hand-written JSON-RPC, no SDK.
 
 | | `webkit` (default) | `chrome` |
 |---|---|---|
-| Install | none — system WebKit (macOS) | needs Chrome/Chromium/Brave |
+| Install | none, system WebKit (macOS) | needs Chrome/Chromium/Brave |
 | Works everywhere | macOS only | any OS |
 | `hover`, network status | no (errors tell you the fix) | yes |
 
-On `webkit`, `detectDeadClicks` returns `registeredNetworkRequests: null` — not measured, not zero.
+On `webkit`, `detectDeadClicks` returns `registeredNetworkRequests: null`, which means not measured, not zero.
 
 ## Docs
 
-* [`docs/cli.md`](./docs/cli.md) — CLI flags + examples
-* [`docs/api.md`](./docs/api.md) — library API
-* [`docs/mcp-tools.md`](./docs/mcp-tools.md) — MCP tools + schemas
-* [`docs/internals.md`](./docs/internals.md) — gotchas we hit (select hangs, poisoned nav, etc.)
-* [`STDLIB.md`](./STDLIB.md) — 17 packages replaced, how
-* `flamingo --help`, `flamingo schema` — everything machine-readable
+* [`docs/cli.md`](./docs/cli.md): CLI flags + examples
+* [`docs/api.md`](./docs/api.md): library API
+* [`docs/mcp-tools.md`](./docs/mcp-tools.md): MCP tools + schemas
+* [`docs/internals.md`](./docs/internals.md): gotchas we hit (select hangs, poisoned nav, etc.)
+* [`STDLIB.md`](./STDLIB.md): 17 packages replaced, how
+* `flamingo --help`, `flamingo schema`: everything machine-readable
 
 ```bash
 bun run build          # -> dist/flamingo (61MB standalone)
@@ -142,4 +142,4 @@ bun test               # 122 tests, real browser
 
 ## License
 
-MIT — [LICENSE](./LICENSE)
+MIT, see [LICENSE](./LICENSE)

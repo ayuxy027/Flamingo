@@ -14,7 +14,7 @@ Sent to every client on `initialize`:
 flamingo drives a real browser in a loop: observe, act, observe.
 
 Call `observe` to see where you are. Then act (clickCoordinate, typeInput, pressKey,
-scroll) — every acting tool returns a fresh observation in its result, so you do not
+scroll). Every acting tool returns a fresh observation in its result, so you do not
 need to call observe again after acting.
 
 An acting tool's result is two parts: the action's own JSON on the first line, then a
@@ -29,19 +29,19 @@ format:"json" if you need the structured form.
 In an observation:
 - element lines are the only genuinely clickable things: on screen, visible, not
   covered. Use the leading (x,y) directly as click coordinates.
-- `changed: false` means your last action did nothing. Do not repeat it — try a
+- `changed: false` means your last action did nothing. Do not repeat it. Try a
   different element, scroll, or look at `blockedBy`.
 - `blockedBy` names what is covering the page (a cookie wall, a modal). Dismiss it
   first; anything behind it is unreachable.
 - `newErrors` are console errors and uncaught exceptions since your last look.
 
 Coordinates are CSS pixels from the latest observation. Never read coordinates off a
-screenshot — those are device pixels, 2x on retina.
+screenshot; those are device pixels, 2x on retina.
 
 After starting async work use `waitFor` / `waitForGone` rather than sleeping.
 `observe` covers the current viewport only; `scrollScan` maps the whole page.
 
-Never click an element marked `nativePicker` (a <select>) — the native popup blocks
+Never click an element marked `nativePicker` (a <select>). The native popup blocks
 the browser. Elements marked `leavesPage` navigate away from the page under test.
 Destructive-looking controls are skipped by the sweep tools and confirm() is answered
 "no"; click one deliberately by coordinate if you really mean to.
@@ -75,7 +75,7 @@ Navigate to a URL and wait for the main frame to finish loading.
 
 ### `observe`
 
-One step of the agent loop: current url and title, the actionable elements with click-ready coordinates, what is covering anything unreachable, plus the console errors and failed requests SINCE THE LAST observe, and a `changed` flag that is false when nothing moved. Call this first, act, then read the observation returned by the action. `changed: false` after an action means the action achieved nothing — try something else rather than repeating it.
+One step of the agent loop: current url and title, the actionable elements with click-ready coordinates, what is covering anything unreachable, plus the console errors and failed requests SINCE THE LAST observe, and a `changed` flag that is false when nothing moved. Call this first, act, then read the observation returned by the action. `changed: false` after an action means the action achieved nothing. Try something else rather than repeating it.
 
 ```json
 {
@@ -96,7 +96,7 @@ One step of the agent loop: current url and title, the actionable elements with 
 
 ### `getInteractiveTree`
 
-Compact list of every element that can actually be acted on, with click-ready CSS-space centre coordinates. Filtered to the viewport and to elements that are not occluded, so it stays small on large pages. Also reports blockedBy — what is covering the unreachable controls, which is how you spot a cookie wall or modal that must be dismissed first. Start here to decide what to click.
+Compact list of every element that can actually be acted on, with click-ready CSS-space centre coordinates. Filtered to the viewport and to elements that are not occluded, so it stays small on large pages. Also reports blockedBy, naming what covers the unreachable controls, which is how you spot a cookie wall or modal that must be dismissed first. Start here to decide what to click.
 
 ```json
 {
@@ -311,7 +311,7 @@ Click a coordinate and report whether anything happened: DOM mutations, console 
 
 ### `crawl`
 
-Click every actionable control on the page and report which ones do nothing, and why — swallowed by an overlay, or no handler fired at all. The fastest way to find broken buttons across a page.
+Click every actionable control on the page and report which ones do nothing, and why: swallowed by an overlay, or no handler fired at all. The fastest way to find broken buttons across a page.
 
 ```json
 {
@@ -350,7 +350,7 @@ Wait until an element appears and is visible, by CSS selector and/or the text it
 
 ### `waitForGone`
 
-Wait until an element matching a selector and/or text is gone — a loading spinner, a modal, a toast. Complements waitFor.
+Wait until an element matching a selector and/or text is gone: a loading spinner, a modal, a toast. Complements waitFor.
 
 ```json
 {
@@ -452,7 +452,7 @@ Scroll the whole page and exercise every control: click buttons and links, type 
 
 ### `stressTest`
 
-Run a fixed sequence of hostile interaction patterns — rapid clicks, double clicks, reload mid-action, navigate away mid-action, resize and scroll mid-action, interleaved clicks — and report the console errors each triggers. Finds race conditions ordinary testing misses. Deterministic and reproducible.
+Run a fixed sequence of hostile interaction patterns (rapid clicks, double clicks, reload mid-action, navigate away mid-action, resize and scroll mid-action, interleaved clicks) and report the console errors each triggers. Finds race conditions ordinary testing misses. Deterministic and reproducible.
 
 ```json
 {
@@ -544,7 +544,7 @@ Resize through viewports and report horizontal overflow with the worst offending
 
 ### `captureViewport`
 
-Screenshot the viewport to a file. Returns the path plus cssSize, pixelSize and deviceScaleFactor — image pixels are scaled by that factor, while all click coordinates are CSS-space. Set base64 only if you need the bytes inline; they are large.
+Screenshot the viewport to a file. Returns the path plus cssSize, pixelSize and deviceScaleFactor. Image pixels are scaled by that factor, while all click coordinates are CSS-space. Set base64 only if you need the bytes inline; they are large.
 
 ```json
 {

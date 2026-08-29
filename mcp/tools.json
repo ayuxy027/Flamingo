@@ -222,7 +222,7 @@
     },
     {
       "name": "observe",
-      "description": "One step of the agent loop: current url and title, the actionable elements with click-ready coordinates, what is covering anything unreachable, plus the console errors and failed requests SINCE THE LAST observe, and a `changed` flag that is false when nothing moved. Call this first, act, then read the observation returned by the action. `changed: false` after an action means the action achieved nothing — try something else rather than repeating it.",
+      "description": "One step of the agent loop: current url and title, the actionable elements with click-ready coordinates, what is covering anything unreachable, plus the console errors and failed requests SINCE THE LAST observe, and a `changed` flag that is false when nothing moved. Call this first, act, then read the observation returned by the action. `changed: false` after an action means the action achieved nothing. Try something else rather than repeating it.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -240,7 +240,7 @@
     },
     {
       "name": "getInteractiveTree",
-      "description": "Compact list of every element that can actually be acted on, with click-ready CSS-space centre coordinates. Filtered to the viewport and to elements that are not occluded, so it stays small on large pages. Also reports blockedBy — what is covering the unreachable controls, which is how you spot a cookie wall or modal that must be dismissed first. Start here to decide what to click.",
+      "description": "Compact list of every element that can actually be acted on, with click-ready CSS-space centre coordinates. Filtered to the viewport and to elements that are not occluded, so it stays small on large pages. Also reports blockedBy, naming what covers the unreachable controls, which is how you spot a cookie wall or modal that must be dismissed first. Start here to decide what to click.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -431,7 +431,7 @@
     },
     {
       "name": "crawl",
-      "description": "Click every actionable control on the page and report which ones do nothing, and why — swallowed by an overlay, or no handler fired at all. The fastest way to find broken buttons across a page.",
+      "description": "Click every actionable control on the page and report which ones do nothing, and why: swallowed by an overlay, or no handler fired at all. The fastest way to find broken buttons across a page.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -464,7 +464,7 @@
     },
     {
       "name": "waitForGone",
-      "description": "Wait until an element matching a selector and/or text is gone — a loading spinner, a modal, a toast. Complements waitFor.",
+      "description": "Wait until an element matching a selector and/or text is gone: a loading spinner, a modal, a toast. Complements waitFor.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -551,7 +551,7 @@
     },
     {
       "name": "stressTest",
-      "description": "Run a fixed sequence of hostile interaction patterns — rapid clicks, double clicks, reload mid-action, navigate away mid-action, resize and scroll mid-action, interleaved clicks — and report the console errors each triggers. Finds race conditions ordinary testing misses. Deterministic and reproducible.",
+      "description": "Run a fixed sequence of hostile interaction patterns (rapid clicks, double clicks, reload mid-action, navigate away mid-action, resize and scroll mid-action, interleaved clicks) and report the console errors each triggers. Finds race conditions ordinary testing misses. Deterministic and reproducible.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -628,7 +628,7 @@
     },
     {
       "name": "captureViewport",
-      "description": "Screenshot the viewport to a file. Returns the path plus cssSize, pixelSize and deviceScaleFactor — image pixels are scaled by that factor, while all click coordinates are CSS-space. Set base64 only if you need the bytes inline; they are large.",
+      "description": "Screenshot the viewport to a file. Returns the path plus cssSize, pixelSize and deviceScaleFactor. Image pixels are scaled by that factor, while all click coordinates are CSS-space. Set base64 only if you need the bytes inline; they are large.",
       "inputSchema": {
         "type": "object",
         "properties": {

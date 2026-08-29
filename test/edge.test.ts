@@ -70,7 +70,7 @@ describe("elements the naive implementation cannot see", () => {
 });
 
 describe("hazards that used to hang or mislead", () => {
-  test("a <select> is flagged and never clicked — clicking one blocks the renderer", async () => {
+  test("a <select> is flagged and never clicked, because clicking one blocks the renderer", async () => {
     using e = await Engine.open({ width: 800, height: 600, url: `${base}/select` });
     const tree = await e.getInteractiveTree();
     expect(tree.interactiveElements.find((x) => x.ref === "select#plan")!.nativePicker).toBe(true);
@@ -104,7 +104,7 @@ describe("hazards that used to hang or mislead", () => {
     expect(await e.view.evaluate<boolean>("window.__answer")).toBe(false);
   }, 60_000);
 
-  test("history.pushState is detected — it fires no load event", async () => {
+  test("history.pushState is detected even though it fires no load event", async () => {
     using e = await Engine.open({ width: 800, height: 600, url: `${base}/spa` });
     const r = await e.detectDeadClicks({ x: 45, y: 18, timeoutMs: 800 });
     expect(r.isDeadClick).toBe(false);
@@ -239,7 +239,7 @@ describe("content a page-level scroll never reveals", () => {
 describe("waiting for things to happen", () => {
   const APP = `<!doctype html><body style="margin:0">
     <button id="go" style="width:120px;height:36px">Load</button>
-    <div id="spinner" style="display:none">Loading…</div>
+    <div id="spinner" style="display:none">Loading...</div>
     <script>document.getElementById('go').onclick = () => {
       const s = document.getElementById('spinner'); s.style.display = 'block';
       setTimeout(() => { s.style.display = 'none';

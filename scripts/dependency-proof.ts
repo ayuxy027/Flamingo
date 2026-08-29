@@ -24,8 +24,8 @@ console.log("\n\x1b[1mDev-only dependencies (permitted, disclosed in STDLIB.md)\
 if (dev.length === 0) pass("none");
 for (const d of dev) {
   d.startsWith("@types/") || d.endsWith("-types")
-    ? pass(`${d} — type declarations only, erased at runtime`)
-    : fail(`${d} — not obviously type-only; justify it in STDLIB.md`);
+    ? pass(`${d}: type declarations only, erased at runtime`)
+    : fail(`${d}: not obviously type-only; justify it in STDLIB.md`);
 }
 
 const BUILTINS = new Set([...builtinModules, "bun", "bun:test", "bun:sqlite", "bun:ffi", "bun:jsc"]);
@@ -41,19 +41,19 @@ console.log(`\n\x1b[1mImports in ${pkg.module}\x1b[0m`);
 if (specifiers.size === 0) pass("no imports at all");
 for (const spec of [...specifiers].sort()) {
   const bare = spec.replace(/^node:/, "");
-  if (spec.startsWith("node:") || BUILTINS.has(bare) || BUILTINS.has(spec)) pass(`${spec} — standard library`);
-  else if (spec.startsWith(".") || spec.startsWith("/")) fail(`${spec} — relative import; the shipped artifact must be self-contained`);
-  else fail(`${spec} — third-party package`);
+  if (spec.startsWith("node:") || BUILTINS.has(bare) || BUILTINS.has(spec)) pass(`${spec}: standard library`);
+  else if (spec.startsWith(".") || spec.startsWith("/")) fail(`${spec}: relative import; the shipped artifact must be self-contained`);
+  else fail(`${spec}: third-party package`);
 }
 
 console.log("\n\x1b[1mShipped files\x1b[0m");
 const files: string[] = pkg.files ?? [];
-files.length ? pass(`files: ${files.join(", ")}`) : fail("no files field — the whole directory would be published");
+files.length ? pass(`files: ${files.join(", ")}`) : fail("no files field; the whole directory would be published");
 for (const f of files) (existsSync(f) ? pass : fail)(`${f} exists`);
 
 console.log(
   failures === 0
-    ? "\n\x1b[32m\x1b[1mZERO THIRD-PARTY RUNTIME DEPENDENCIES — verified\x1b[0m\n"
+    ? "\n\x1b[32m\x1b[1mZERO THIRD-PARTY RUNTIME DEPENDENCIES: verified\x1b[0m\n"
     : `\n\x1b[31m\x1b[1m${failures} check(s) failed\x1b[0m\n`,
 );
 process.exit(failures === 0 ? 0 : 1);

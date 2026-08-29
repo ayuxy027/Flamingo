@@ -30,7 +30,7 @@ const second = await build("build 2");
 const identical = first === second;
 console.log(
   identical
-    ? `\n\x1b[32m\x1b[1mREPRODUCIBLE — both builds are byte-identical\x1b[0m\n\n  sha256  ${first}\n`
+    ? `\n\x1b[32m\x1b[1mREPRODUCIBLE: both builds are byte-identical\x1b[0m\n\n  sha256  ${first}\n`
     : `\n\x1b[31m\x1b[1mNOT REPRODUCIBLE\x1b[0m\n  ${first}\n  ${second}\n`,
 );
 

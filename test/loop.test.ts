@@ -24,7 +24,7 @@ beforeAll(() => {
 });
 afterAll(() => server.stop(true));
 
-describe("observe — one step of the agent loop", () => {
+describe("observe: one step of the agent loop", () => {
   test("reports only reachable controls, and names what blocks the rest", async () => {
     using e = await Engine.open({ width: 800, height: 400, url });
     const o = await e.observe();
@@ -74,7 +74,7 @@ describe("observe — one step of the agent loop", () => {
   }, 60_000);
 });
 
-describe("init — wiring a project up", () => {
+describe("init: wiring a project up", () => {
   const run = async (dir: string, ...args: string[]) => {
     const proc = Bun.spawn(["bun", "run", "flamingo.ts", "init", "--dir", dir, ...args], { stdout: "pipe", stderr: "pipe" });
     const [stdout, exitCode] = await Promise.all([new Response(proc.stdout).text(), proc.exited]);

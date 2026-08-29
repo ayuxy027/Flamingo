@@ -17,7 +17,7 @@ async function cli(...args: string[]) {
   return { stdout, exitCode };
 }
 
-describe("scroll — mapping a page taller than the viewport", () => {
+describe("scroll: mapping a page taller than the viewport", () => {
   test("maps the whole page, not just the first viewport", async () => {
     using e = await Engine.open({ width: 1280, height: 800, url });
     const viewport = (await e.getInteractiveTree()).interactiveElements.length;
@@ -57,7 +57,7 @@ describe("scroll — mapping a page taller than the viewport", () => {
   }, 90_000);
 });
 
-describe("interact — exercising a whole page", () => {
+describe("interact: exercising a whole page", () => {
   test("finds a field that silently discards what is typed into it", async () => {
     using e = await Engine.open({ width: 1280, height: 800, url });
     const r = await e.interact({ dwellMs: 300 });
@@ -95,7 +95,7 @@ describe("interact — exercising a whole page", () => {
   }, 180_000);
 });
 
-describe("stress — hostile interaction patterns", () => {
+describe("stress: hostile interaction patterns", () => {
   test("finds a re-entrancy bug that a single click cannot", async () => {
     using e = await Engine.open({ width: 1280, height: 800, url });
     const r = await e.stressTest({ maxTargets: 6 });
@@ -109,7 +109,7 @@ describe("stress — hostile interaction patterns", () => {
     expect(single).toBeDefined();
   }, 300_000);
 
-  test("every scenario actually runs — a scenario that throws is not a pass", async () => {
+  test("every scenario actually runs; a scenario that throws is not a pass", async () => {
     using e = await Engine.open({ width: 1280, height: 800, url });
     const r = await e.stressTest({ maxTargets: 2 });
     expect(r.scenarios.length).toBeGreaterThan(0);

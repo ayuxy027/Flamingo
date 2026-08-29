@@ -25,7 +25,7 @@ const fence = (lang: string, body: string) => "```" + lang + "\n" + body + "\n``
 emit(
   "docs/cli.md",
   GENERATED +
-    `# CLI reference\n\nflamingo ${doc.version} — ${doc.tagline}\n\n` +
+    `# CLI reference\n\nflamingo ${doc.version} - ${doc.tagline}\n\n` +
     `## Commands\n\n| Command | Summary | Exit |\n| :-- | :-- | :-- |\n` +
     doc.commands.map((c) => `| \`${`flamingo ${c.name} ${c.args}`.trim()}\` | ${c.summary} | ${c.exits} |`).join("\n") +
     `\n\n` +

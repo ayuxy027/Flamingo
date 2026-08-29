@@ -19,7 +19,7 @@ const step = await e.observe();
 | `clickCoordinate` | Click. |
 | `close` | Close the view and release its browser process. |
 | `compileHealthReport` | Consolidated scorecard: console errors, broken assets, dead clicks and layout overflow, with a pass/fail total. |
-| `crawl` | Click every actionable control on the page and report which ones do nothing, and why — swallowed by an overlay, or no handler fired at all. |
+| `crawl` | Click every actionable control on the page and report which ones do nothing, and why: swallowed by an overlay, or no handler fired at all. |
 | `detectDeadClicks` | Click a coordinate and report whether anything happened: DOM mutations, console output, navigation, and network requests. |
 | `detectPointerBlocker` | Explain whether a click at (x, y) reaches an interactive element, and name the element blocking it if not. |
 | `getInteractiveTree` | Compact list of every element that can actually be acted on, with click-ready CSS-space centre coordinates. |
@@ -34,10 +34,10 @@ const step = await e.observe();
 | `scanBrokenAssets` | Broken images, stylesheets and failed requests. |
 | `scroll` | Scroll by a pixel delta (dx/dy) or bring a selector into view. |
 | `scrollScan` | Scroll the entire page and return one merged map: every interactive element in document-space coordinates, the heading outline, what is pinned over the content, and whether the page lazy-loads. |
-| `stressTest` | Run a fixed sequence of hostile interaction patterns — rapid clicks, double clicks, reload mid-action, navigate away mid-action, resize and scroll mid-action, interleaved clicks — and report the console errors each triggers. |
+| `stressTest` | Run a fixed sequence of hostile interaction patterns (rapid clicks, double clicks, reload mid-action, navigate away mid-action, resize and scroll mid-action, interleaved clicks) and report the console errors each triggers. |
 | `typeInput` | Type into the focused element. |
 | `waitFor` | Wait until an element appears and is visible, by CSS selector and/or the text it contains. |
-| `waitForGone` | Wait until an element matching a selector and/or text is gone — a loading spinner, a modal, a toast. |
+| `waitForGone` | Wait until an element matching a selector and/or text is gone: a loading spinner, a modal, a toast. |
 | `waitForIdle` | Wait until no network request has started for a quiet window. |
 
 ## `Engine.open(options)`
