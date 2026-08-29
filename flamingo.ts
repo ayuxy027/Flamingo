@@ -931,8 +931,17 @@ const TOOLS: Record<string, Tool> = {
   },
 };
 
-function send(msg: unknown) {
-  process.stdout.write(JSON.stringify(msg) + "\n");
+/**
+ * Write one protocol frame and resolve once it has actually reached the OS.
+ *
+ * `process.stdout.write` buffers when stdout is a pipe, so a reply written just
+ * before the process exits can be lost. Every caller awaits this, which makes
+ * the loop below both ordered and flush-safe.
+ */
+function send(msg: unknown): Promise<void> {
+  return new Promise((resolve) => {
+    process.stdout.write(JSON.stringify(msg) + "\n", () => resolve());
+  });
 }
 
 async function handle(msg: any, getEngine: () => Promise<Engine>) {
@@ -988,9 +997,9 @@ async function handle(msg: any, getEngine: () => Promise<Engine>) {
 
     if (method === "ping") return send({ jsonrpc: "2.0", id, result: {} });
 
-    send({ jsonrpc: "2.0", id, error: { code: -32601, message: `Method not found: ${method}` } });
+    return send({ jsonrpc: "2.0", id, error: { code: -32601, message: `Method not found: ${method}` } });
   } catch (e: any) {
-    send({ jsonrpc: "2.0", id, error: { code: -32603, message: e?.message ?? String(e) } });
+    return send({ jsonrpc: "2.0", id, error: { code: -32603, message: e?.message ?? String(e) } });
   }
 }
 
@@ -1017,12 +1026,14 @@ export async function runMcpServer(opts: EngineOptions = {}): Promise<void> {
       try {
         await handle(JSON.parse(line), getEngine);
       } catch {
-        send({ jsonrpc: "2.0", id: null, error: { code: -32700, message: "Parse error" } });
+        await send({ jsonrpc: "2.0", id: null, error: { code: -32700, message: "Parse error" } });
       }
     }
   }
 
   // stdin closed: the client is gone.
+  // Drain anything still queued before tearing the browser down and exiting.
+  await new Promise<void>((resolve) => process.stdout.write("", () => resolve()));
   state.engine?.close();
   Bun.WebView.closeAll();
 }
