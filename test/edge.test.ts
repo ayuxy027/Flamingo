@@ -1,7 +1,6 @@
 import { test, expect, beforeAll, afterAll, describe } from "bun:test";
 import { Engine } from "../flamingo.ts";
 
-// Each case here corresponds to a bug found by driving a real browser hard.
 const PAGES: Record<string, string> = {
   shadow: `<div id="host"></div><script>
     const r = document.getElementById('host').attachShadow({mode:'open'});
@@ -57,7 +56,6 @@ describe("elements the naive implementation cannot see", () => {
   test("iframes are reported even though their contents cannot be reached", async () => {
     using e = await Engine.open({ width: 800, height: 600, url: `${base}/frames` });
     const tree = await e.getInteractiveTree();
-    // Honest reporting matters: an agent must not conclude the page is empty.
     expect(tree.frames.length).toBe(1);
     expect(tree.interactiveElements.map((x) => x.ref)).toContain("button#outer");
   }, 60_000);
@@ -77,7 +75,6 @@ describe("hazards that used to hang or mislead", () => {
     const tree = await e.getInteractiveTree();
     expect(tree.interactiveElements.find((x) => x.ref === "select#plan")!.nativePicker).toBe(true);
 
-    // If crawl clicked it, this would never return.
     const started = Date.now();
     const r = await e.crawl({ dwellMs: 200 });
     expect(Date.now() - started).toBeLessThan(20_000);
@@ -90,7 +87,6 @@ describe("hazards that used to hang or mislead", () => {
       using e = await Engine.open({ width: 400, height: 300 });
       const g = await e.goto(`http://127.0.0.1:${dead.port}/`, { timeoutMs: 2000 });
       expect(g.timedOut).toBe(true);
-      // A pending navigation poisons the view; the next goto must rebuild it.
       const back = await e.goto(`${base}/shadow`);
       expect(back.recovered).toBe(true);
       expect((await e.getInteractiveTree()).interactiveElements.length).toBeGreaterThan(0);
@@ -105,7 +101,6 @@ describe("hazards that used to hang or mislead", () => {
     expect(r.isDeadClick).toBe(false);
     expect(r.reason).toBe("dialog");
     expect(r.openedDialog).toBe(true);
-    // Crawling an admin panel must not confirm destructive prompts.
     expect(await e.view.evaluate<boolean>("window.__answer")).toBe(false);
   }, 60_000);
 
@@ -139,8 +134,6 @@ describe("correctness of what gets reported", () => {
     using e = await Engine.open({ width: 800, height: 600, url: `${base}/headings` });
     const map = await e.scrollScan();
     const h = map.outline.find((o: any) => o.tag === "h1") as any;
-    // A regex written as /\s+/ inside a template literal degrades to /s+/,
-    // which silently replaced every "s" in the page with a space.
     expect(h.text).toBe("Features and Testimonials");
   }, 60_000);
 
@@ -148,23 +141,17 @@ describe("correctness of what gets reported", () => {
     using e = await Engine.open({ width: 800, height: 600, url: `${base}/partial` });
     const map = await e.scrollScan();
     const hits = map.elements.filter((x) => x.ref === "button#straddle");
-    // Identity must come from the unclipped document position, because the
-    // viewport-clipped centre changes at every scroll offset.
     expect(hits).toHaveLength(1);
   }, 60_000);
 });
 
 describe("navigation primitives that can never resolve", () => {
   test("repeated goBack stays bounded and leaves the engine usable", async () => {
-    // Bun 1.4.0 chrome: goBack() can never resolve once history runs out, and the
-    // pending navigation it leaves poisons the view. The guarantee worth asserting
-    // is boundedness — whether a given call times out is Bun's business, not ours.
     using e = await Engine.open({ backend: "chrome", width: 400, height: 300, url: `${base}/shadow` });
     const started = Date.now();
     for (let i = 0; i < 3; i++) await e.goBack({ timeoutMs: 3000 });
     expect(Date.now() - started).toBeLessThan(20_000);
 
-    // whatever happened, the engine recovers and works
     await e.goto(`${base}/shadow`);
     expect((await e.getInteractiveTree()).interactiveElements.length).toBeGreaterThan(0);
   }, 90_000);
@@ -175,7 +162,6 @@ describe("navigation primitives that can never resolve", () => {
     const r = await e.stressTest({ maxTargets: 1, settleMs: 100 });
     expect(Date.now() - started).toBeLessThan(120_000);
     expect(r.scenarios.length).toBeGreaterThan(0);
-    // a scenario blocked by a browser limitation is reported, never silently passed
     for (const s of r.scenarios) {
       if (s.ran === false) expect(String(s.threw).length).toBeGreaterThan(0);
     }
@@ -200,7 +186,6 @@ describe("what is covering the page", () => {
     try {
       using e = await Engine.open({ width: 800, height: 400, url: `http://127.0.0.1:${wall.port}/` });
       const tree = await e.getInteractiveTree();
-      // "6 occluded" is a fact; "6 behind div#cookiewall" is something to act on.
       expect(tree.blockedBy[0]).toEqual({ ref: "div#cookiewall", count: 6 });
       expect(tree.interactiveElements.map((x) => x.ref)).toEqual(["button#accept"]);
     } finally {
@@ -238,12 +223,10 @@ describe("content a page-level scroll never reveals", () => {
       const ext = tree.interactiveElements.find((x) => x.ref === "a#ext")!;
       const frag = tree.interactiveElements.find((x) => x.ref === "a#frag")!;
       expect(ext.leavesPage).toBe(true);
-      // a same-document fragment link still depends on JS, so it must be clicked
       expect(frag.leavesPage).toBe(false);
 
       const started = Date.now();
       const r = await e.crawl({ dwellMs: 400 });
-      // the external link is alive by construction, so no navigation was needed
       expect(r.alive).toBeGreaterThanOrEqual(1);
       expect(e.view.url).toContain("127.0.0.1");
       expect(Date.now() - started).toBeLessThan(15_000);
@@ -281,7 +264,6 @@ describe("waiting for things to happen", () => {
 
     const gone = await e.waitForGone({ selector: "#spinner", timeoutMs: 3000 });
     expect(gone.gone).toBe(true);
-    // it really did have to wait for the async work, not just return immediately
     expect(gone.waitedMs).toBeGreaterThan(200);
   }, 60_000);
 
@@ -290,7 +272,6 @@ describe("waiting for things to happen", () => {
     await e.clickCoordinate({ x: 60, y: 18 });
     const done = await e.waitFor({ textContains: "Saved successfully", timeoutMs: 3000 });
     expect(done.found).toBe(true);
-    // <body> and <html> also contain that text; the useful answer is the div
     expect(done.element!.ref).toBe("div#done");
   }, 60_000);
 
@@ -328,12 +309,10 @@ describe("session persistence", () => {
         await e.view.evaluate("localStorage.setItem('token','logged-in-user'), 1");
       }
       {
-        // this is what makes testing a logged-in app possible
         using e = await Engine.open({ width: 400, height: 300, url: u, profileDirectory: dir });
         expect(await read(e)).toBe("logged-in-user");
       }
       {
-        // and the default must stay isolated, or runs contaminate each other
         using e = await Engine.open({ width: 400, height: 300, url: u });
         expect(await read(e)).toBe("anonymous");
       }
@@ -354,7 +333,6 @@ describe("links that look like navigation but are not", () => {
     try {
       using e = await Engine.open({ width: 800, height: 400, url: `http://127.0.0.1:${srv.port}/` });
       const by = new Map((await e.getInteractiveTree()).interactiveElements.map((x) => [x.ref, x]));
-      // marking these "leaves the page" would let crawl call them alive untested
       for (const ref of ["a#mail", "a#tel", "a#js", "a#dl"]) {
         expect(by.get(ref)?.leavesPage ?? false).toBe(false);
       }
@@ -375,7 +353,6 @@ describe("noise the agent should not pay for", () => {
     try {
       using e = await Engine.open({ width: 800, height: 400, url: `http://127.0.0.1:${srv.port}/` });
       const tree = await e.getInteractiveTree();
-      // landing on body means nothing covers it — that is not a blocker
       expect(tree.blockedBy.map((b) => b.ref)).not.toContain("body");
       expect(tree.blockedBy.map((b) => b.ref)).not.toContain("html");
     } finally {
@@ -395,8 +372,6 @@ describe("navigations that race each other", () => {
     try {
       using e = await Engine.open({ width: 800, height: 400 });
       await e.goto(`http://127.0.0.1:${srv.port}/`);
-      // the meta refresh fires while we are leaving, cancelling our navigation;
-      // that is a race we lost, not an error to surface as NSURLErrorDomain -999
       const next = await e.goto(`http://127.0.0.1:${srv.port}/next`);
       expect(next.url).toContain("/next");
       expect((await e.getInteractiveTree()).interactiveElements.map((x) => x.ref)).toContain("button#next");

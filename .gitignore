@@ -1,6 +1,6 @@
 node_modules/
-.flamingo/
 dist/
+.flamingo/
 *.log
-.nodep/
+*.tgz
 .DS_Store

@@ -1,34 +1,7 @@
 #!/usr/bin/env bun
-/**
- * flamingo — AI-native browser automation and frontend testing.
- *
- * Zero third-party runtime dependencies: the Bun standard library only. The
- * entire project — library, MCP server and CLI — is this one file.
- *
- * Bun.WebView (Bun >= 1.4) provides process lifecycle, the CDP transport, input
- * dispatch, screenshots and console capture. What this file adds is the layer an
- * agent actually needs: compact viewport-filtered element trees, click
- * diagnostics, dead-click detection, responsive auditing and a health report.
- *
- * Library:  import { Engine } from "./flamingo.ts"
- * CLI:      flamingo audit http://localhost:3000 --json
- * MCP:      flamingo serve --backend chrome
- *
- * @license MIT
- */
-
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 
-// =========================================================================
-// SECTION 1 — Programs that run inside the page
-//
-// Bun.WebView.evaluate() takes an *expression* and serializes the result with
-// JSON.stringify page-side, so each of these is an IIFE returning a plain
-// object. One round trip each, no DOM node handles to release.
-// =========================================================================
-
-/** Renders an element as a short `tag#id.class` reference for report output. */
 const DESCRIBE = `const describe = (el) => {
     if (!el) return null;
     let s = el.tagName.toLowerCase();
@@ -37,11 +10,6 @@ const DESCRIBE = `const describe = (el) => {
     return s;
   };`;
 
-/**
- * Is this element pinned to the viewport by a fixed/sticky ancestor? Pinned
- * elements stay reachable at any scroll position, so a scroll pass must dedupe
- * them by identity rather than by document position.
- */
 const PINNED = `const isPinned = (el) => {
     for (let n = el, hops = 0; n && n.nodeType === 1 && hops < 40; hops++) {
       const p = getComputedStyle(n).position;
@@ -52,14 +20,8 @@ const PINNED = `const isPinned = (el) => {
     return false;
   };`;
 
-/** What counts as "actionable" for an agent. */
 const SELECTOR = `'a[href],button,input,select,textarea,summary,[role="button"],[role="link"],[role="tab"],[role="menuitem"],[role="checkbox"],[role="radio"],[role="switch"],[onclick],[tabindex]:not([tabindex="-1"]),[contenteditable="true"]'`;
 
-/**
- * Shadow DOM is not optional any more: every built-in form control, and most
- * component libraries, put their real controls behind a shadow root that
- * querySelectorAll cannot see. Both the element walk and the hit test pierce it.
- */
 const DEEP = `const collectDeep = (root, sel, out) => {
     for (const el of root.querySelectorAll("*")) {
       if (el.matches && el.matches(sel)) out.push(el);
@@ -82,14 +44,6 @@ const DEEP = `const collectDeep = (root, sel, out) => {
     return top && top !== stack[0] ? [top, ...stack] : stack;
   };`;
 
-/**
- * Flat list of elements an agent can act on.
- *
- * The filtering is the whole point: without it a page with a mega-menu still
- * returns hundreds of entries and we are back to context exhaustion. Elements
- * are dropped when off-viewport, zero-size, styled invisible, or occluded by
- * something else at their own centre point.
- */
 const interactiveTree = (max: number) => `(() => {
   ${DESCRIBE}
   ${DEEP}
@@ -105,19 +59,12 @@ const interactiveTree = (max: number) => `(() => {
     if (r.bottom <= 0 || r.right <= 0 || r.top >= vh || r.left >= vw) { offscreen++; continue; }
     const st = getComputedStyle(el);
     if (st.visibility === "hidden" || st.display === "none" || st.opacity === "0") { hidden++; continue; }
-    // Centre of the *visible* part, so half-scrolled elements still hit-test.
     const x = Math.round((Math.max(r.left, 0) + Math.min(r.right, vw)) / 2);
     const y = Math.round((Math.max(r.top, 0) + Math.min(r.bottom, vh)) / 2);
     const hit = deepElementFromPoint(x, y);
-    // el.contains(hit) keeps <button><span>text</span></button>. An ancestor hit
-    // means something else owns that point, so the element is not clickable there.
     const reachable = hit && (el === hit || el.contains(hit) || (el.shadowRoot && el.shadowRoot.contains(hit)));
     if (!reachable) {
       occluded++;
-      // A cookie banner or modal blanketing the page shows up here as one ref
-      // blocking many controls, which is the actionable form of "12 occluded".
-      // Landing on body/html means nothing is on top; naming them as the blocker
-      // is noise, and it is noise the agent pays for on every observation.
       const by = hit.tagName === "BODY" || hit.tagName === "HTML" ? null : describe(hit);
       if (by) blockers.set(by, (blockers.get(by) || 0) + 1);
       continue;
@@ -133,8 +80,6 @@ const interactiveTree = (max: number) => `(() => {
       ref: describe(el),
       tag: el.tagName.toLowerCase(),
       text,
-      // center is clipped to the viewport so it is always clickable; documentX/Y
-      // come from the unclipped rect so they are stable identity across scrolls.
       center: { x, y },
       documentX: Math.round(r.left + scrollX),
       documentY: Math.round(r.top + scrollY),
@@ -144,22 +89,15 @@ const interactiveTree = (max: number) => `(() => {
     if (el.tagName === "A" && el.href) {
       item.href = el.href;
       const raw = el.getAttribute("href") || "";
-      // mailto:/tel:/sms: hand off to another app and a download attribute saves a
-      // file — none of them navigate, so treating them as "leaves the page" would
-      // let a crawl mark them alive without ever testing them.
       const handsOff = /^(mailto|tel|sms|javascript):/i.test(raw) || el.hasAttribute("download");
       item.leavesPage = !handsOff && el.href.split("#")[0] !== location.href.split("#")[0];
     }
     if (el.disabled) item.disabled = true;
-    // Clicking a <select> opens a native popup that blocks the renderer until a
-    // human dismisses it. Nothing automated may click one.
     if (el.tagName === "SELECT") item.nativePicker = true;
     if (el.getRootNode() !== document) item.inShadowDom = true;
     if (isPinned(el)) item.pinned = true;
     out.push(item);
   }
-  // Cross-origin and srcdoc frames run in another context that evaluate() cannot
-  // reach. Reporting the count stops an agent concluding the page is empty.
   const frames = [...document.querySelectorAll("iframe,frame")].map((f) => ({
     ref: describe(f), src: f.getAttribute("src") || (f.hasAttribute("srcdoc") ? "srcdoc" : null),
   }));
@@ -167,8 +105,6 @@ const interactiveTree = (max: number) => `(() => {
     .map(([ref, count]) => ({ ref, count }))
     .sort((a, b) => b.count - a.count)
     .slice(0, 5);
-  // A cheap fingerprint of visible text, so a change that touches no interactive
-  // element — a result message, a validation error — is still detected.
   let contentHash = 0;
   const body = document.body;
   const shown = body ? String(body.innerText || "").slice(0, 20000) : "";
@@ -187,12 +123,6 @@ const interactiveTree = (max: number) => `(() => {
   };
 })()`;
 
-/**
- * Why a click at (x, y) will or will not reach an interactive element.
- *
- * WebView's click(selector) already refuses obscured elements, but it only ever
- * reports "timeout waiting to be actionable". This says what is in the way.
- */
 const hitTest = (x: number, y: number) => `(() => {
   ${DESCRIBE}
   ${DEEP}
@@ -205,7 +135,6 @@ const hitTest = (x: number, y: number) => `(() => {
   const idx = stack.findIndex((e) => e.matches && e.matches(SEL));
   const intended = idx >= 0 ? stack[idx] : null;
   const top = stack[0];
-  // Blocked when the topmost element is neither the target nor inside it.
   const isBlocked = !!intended && top !== intended && !intended.contains(top);
   return {
     isBlocked,
@@ -218,10 +147,6 @@ const hitTest = (x: number, y: number) => `(() => {
   };
 })()`;
 
-/**
- * Headings and landmarks with document-space positions, so a scroll pass can
- * assemble an outline of the whole page rather than one viewport at a time.
- */
 const outlineProbe = `(() => {
   ${DESCRIBE}
   ${PINNED}
@@ -230,8 +155,6 @@ const outlineProbe = `(() => {
   const LANDMARKS = "main,nav,header,footer,aside,form,section[aria-label],[role=region][aria-label]";
   const push = (el, text, level) => {
     if (!text) return;
-    // Pinned chrome rides along with the scroll, so its document position is
-    // meaningless and it would otherwise be re-recorded at every step.
     if (isPinned(el)) return;
     const r = el.getBoundingClientRect();
     out.push({ ref: describe(el), tag: el.tagName.toLowerCase(), level, text, documentY: Math.round(r.top + scrollY) });
@@ -242,17 +165,12 @@ const outlineProbe = `(() => {
     push(el, clean(el.innerText), m ? Number(m[1]) : Number(el.getAttribute("aria-level")) || null);
   }
   for (const el of document.querySelectorAll(LANDMARKS)) {
-    // Landmarks use their label only: innerText on <main> is the whole page.
     push(el, clean(el.getAttribute("aria-label")), null);
   }
   out.sort((a, b) => a.documentY - b.documentY);
   return out;
 })()`;
 
-/**
- * Containers that scroll independently of the document. A page-level scroll
- * never reveals their contents, so an agent needs to be told they exist.
- */
 const scrollableProbe = `(() => {
   ${DESCRIBE}
   const out = [];
@@ -269,7 +187,6 @@ const scrollableProbe = `(() => {
   return out;
 })()`;
 
-/** Elements pinned to the viewport — they follow a scroll and can hide content. */
 const stickyProbe = `(() => {
   ${DESCRIBE}
   const out = [];
@@ -284,13 +201,6 @@ const stickyProbe = `(() => {
   return out;
 })()`;
 
-/**
- * Resolve once layout has stopped changing, or after `maxMs`.
- *
- * There is no CDP "layout settled" event, so the alternative is a fixed sleep
- * long enough for the worst case — which is wasted on every page that is not the
- * worst case. Two identical frames is a good enough definition of settled.
- */
 const settleProbe = (maxMs: number) => `new Promise((resolve) => {
   const started = performance.now();
   let last = null, stable = 0;
@@ -309,10 +219,6 @@ const settleProbe = (maxMs: number) => `new Promise((resolve) => {
   requestAnimationFrame(tick);
 })`;
 
-/**
- * First visible element matching a selector and/or containing some text,
- * returned in the same shape as a tree entry so it is immediately clickable.
- */
 const findElement = (selector: string | null, textContains: string | null) => `(() => {
   ${DESCRIBE}
   ${DEEP}
@@ -339,13 +245,10 @@ const findElement = (selector: string | null, textContains: string | null) => `(
     }
     if (!visible(el)) continue;
     matches.push(el);
-    // A selector with no text filter is unambiguous; take the first hit.
     if (!needle) break;
   }
   if (!matches.length) return null;
 
-  // Text matches every ancestor of the text too, so prefer the tightest element:
-  // the one that contains no other match.
   const el = matches.find((m) => !matches.some((o) => o !== m && m.contains(o))) || matches[0];
   const r = el.getBoundingClientRect();
   const x = Math.round((Math.max(r.left, 0) + Math.min(r.right, vw)) / 2);
@@ -363,7 +266,6 @@ const findElement = (selector: string | null, textContains: string | null) => `(
   };
 })()`;
 
-/** Scroll geometry, read on its own because it is polled between scroll steps. */
 const scrollMetrics = `({
   scrollY: Math.round(scrollY),
   viewportHeight: innerHeight,
@@ -383,7 +285,6 @@ const focusedFieldValue = `(() => {
   return { tag: a.tagName.toLowerCase(), type: a.getAttribute("type"), value: a.value ?? null, editable: a.isContentEditable === true };
 })()`;
 
-/** Horizontal overflow at the current viewport, worst offenders first. */
 const overflowScan = (max: number) => `(() => {
   ${DESCRIBE}
   const vw = innerWidth;
@@ -409,11 +310,6 @@ const overflowScan = (max: number) => `(() => {
   };
 })()`;
 
-/**
- * Assets the DOM knows are broken. Status codes are not available here — they
- * come from the network buffer, which is why this is joined with CDP data on the
- * chrome backend and reported without codes on webkit.
- */
 const brokenAssetsProbe = `(() => {
   const out = [];
   for (const img of document.images) {
@@ -433,13 +329,6 @@ const brokenAssetsProbe = `(() => {
   return out;
 })()`;
 
-// DOM.documentUpdated (which the PRD names) only fires when the whole document is
-// replaced, not on subtree mutations — so it misses nearly every real click. A
-// MutationObserver installed before the click is the only thing that sees them.
-//
-// The probe only *accumulates*; deciding when to stop is the host's job, so it can
-// weigh page signals against network and navigation together and exit the moment
-// any of them fires instead of sleeping out a fixed window.
 const installReactionProbe = `(() => {
   const w = window;
   if (w.__flamingoCleanup) { try { w.__flamingoCleanup(); } catch (e) {} }
@@ -449,17 +338,12 @@ const installReactionProbe = `(() => {
   w.__flamingoFocus = false;
   w.__flamingoDialogs = 0;
   w.__flamingoUrl0 = location.href;
-  // Dialogs are a real reaction and would otherwise read as "nothing happened".
-  // They are answered *negatively* on purpose: auto-confirming a crawl through
-  // someone's admin panel would happily delete things.
   const nativeDialogs = { alert: w.alert, confirm: w.confirm, prompt: w.prompt };
   w.alert = function () { w.__flamingoDialogs++; };
   w.confirm = function () { w.__flamingoDialogs++; return false; };
   w.prompt = function () { w.__flamingoDialogs++; return null; };
   const obs = new MutationObserver((ms) => { w.__flamingoMut += ms.length; });
   obs.observe(document.documentElement, { subtree: true, childList: true, attributes: true, characterData: true });
-  // Focus is a reaction a MutationObserver cannot see, and clicking a field
-  // changes nothing else. Only fields count: buttons take focus on every click.
   const onFocus = (e) => {
     const t = e.target;
     if (!t || !t.tagName) return;
@@ -479,7 +363,6 @@ const installReactionProbe = `(() => {
   return true;
 })()`;
 
-/** `mutations: -1` means the probe is gone, i.e. navigation replaced the context. */
 const readReactionProbe = `({
   mutations: typeof window.__flamingoMut === "number" ? window.__flamingoMut : -1,
   focusChanged: window.__flamingoFocus === true,
@@ -487,20 +370,11 @@ const readReactionProbe = `({
   urlChanged: typeof window.__flamingoUrl0 === "string" && location.href !== window.__flamingoUrl0
 })`;
 
-/**
- * Forward uncaught errors and unhandled rejections into console.error.
- *
- * Bun.WebView's console capture only sees explicit console.* calls, so a real
- * `throw` — the most important thing a test tool can report — is otherwise
- * invisible. Routing them through console.error is what makes them visible.
- */
 const installErrorForwarder = `(() => {
   if (window.__flamingoErrHook) return true;
   window.__flamingoErrHook = true;
   const fmt = (v) => {
     if (!v) return String(v);
-    // WebKit's Error.stack carries only frames, Chrome's leads with the message.
-    // Build the headline ourselves so both backends report the same thing.
     const head = v.message ? (v.name ? v.name + ": " : "") + v.message : "";
     const stack = v.stack ? String(v.stack) : "";
     if (head && stack) return stack.indexOf(v.message) === 0 || stack.indexOf(head) === 0 ? stack : head + " | " + stack;
@@ -519,13 +393,6 @@ const stopReactionProbe = `(() => { if (window.__flamingoCleanup) window.__flami
 
 const viewportInfo = `({ width: innerWidth, height: innerHeight, deviceScaleFactor: devicePixelRatio, scrollX, scrollY })`;
 
-// =========================================================================
-// SECTION 2 — Engine — the twelve agent-facing APIs
-//
-// Everything below is backend-agnostic except the three that need CDP, which
-// throw a message naming the fix when called on the webkit backend.
-// =========================================================================
-
 export type Backend = "webkit" | "chrome";
 
 interface ReactionProbe {
@@ -536,33 +403,14 @@ interface ReactionProbe {
 }
 
 export interface EngineOptions {
-  /**
-   * `"webkit"` (default) uses the system WebKit on macOS with no external
-   * browser. `"chrome"` drives Chrome/Chromium/Brave over CDP and is required
-   * for the network-dependent APIs.
-   */
   backend?: Backend;
-  /** Chrome executable path. Defaults to `BUN_CHROME_PATH`, then a probe of standard locations. */
   chromePath?: string;
-  /** @default 1280 */
   width?: number;
-  /** @default 800 */
   height?: number;
-  /** Navigate here during `open()`. */
   url?: string;
-  /** Max buffered console and network entries, oldest dropped. @default 500 */
   bufferSize?: number;
-  /** Called as long-running sweeps advance. Use it to show progress. */
   onProgress?: (stage: string, detail: string) => void;
-  /**
-   * Where cookies, localStorage and IndexedDB live.
-   *
-   * Ephemeral by default, so runs never contaminate each other. Point it at a
-   * directory to keep a session between runs — which is how you test an app
-   * that requires a login without logging in every time.
-   */
   profileDirectory?: string;
-  /** How long an in-page evaluate may stall before the view is rebuilt. @default 10000 */
   evaluateTimeoutMs?: number;
 }
 
@@ -576,22 +424,16 @@ export interface InteractiveElement {
   ref: string;
   tag: string;
   text: string;
-  /** Viewport-space centre, clipped so it is always a valid click target. */
   center: { x: number; y: number };
-  /** Document-space position of the element's top-left, stable across scrolling. */
   documentX: number;
   documentY: number;
   boundingBox: { x: number; y: number; width: number; height: number };
   type?: string;
   disabled?: boolean;
-  /** Resolved href, for anchors. */
   href?: string;
-  /** This anchor points at a different document, so clicking it only navigates away. */
   leavesPage?: boolean;
-  /** Held in place by a fixed/sticky ancestor, so reachable at any scroll position. */
   pinned?: boolean;
   inShadowDom?: boolean;
-  /** A <select>: clicking it opens a native popup that blocks the renderer. */
   nativePicker?: boolean;
 }
 
@@ -601,40 +443,28 @@ export interface InteractiveTree {
   occluded: number;
   offscreen: number;
   hidden: number;
-  /** What is covering the occluded controls, commonest blocker first. */
   blockedBy: Array<{ ref: string; count: number }>;
-  /** Fingerprint of visible text, for detecting change that touches no control. */
   contentHash: number;
   contentLength: number;
   frames: Array<{ ref: string | null; src: string | null }>;
   url: string;
-  /** Read from the document: WebView.title is set asynchronously and races. */
   title: string;
   scroll: { x: number; y: number; maxY: number };
   viewport: { width: number; height: number };
 }
 
-/**
- * One step of an agent's feedback loop: where it is, what it can do next, and
- * what changed since it last looked.
- */
 export interface Observation {
   url: string;
   title: string;
   loading: boolean;
   viewport: { width: number; height: number };
   scroll: { y: number; maxY: number; atBottom: boolean };
-  /** Actionable elements, already filtered to what is genuinely reachable. */
   elements: InteractiveElement[];
   elementsTruncated: number;
-  /** What is covering the unreachable controls, if anything. */
   blockedBy: Array<{ ref: string; count: number }>;
   frames: number;
-  /** Console errors since the previous observe() — the loop's failure signal. */
   newErrors: string[];
-  /** Requests that failed since the previous observe(). Chrome backend only. */
   newFailedRequests: Array<{ url: string; status?: number; errorReason?: string }>;
-  /** False when nothing at all changed since the previous observe(). */
   changed: boolean;
 }
 
@@ -661,7 +491,6 @@ export interface NetworkEntry {
   timestamp: number;
 }
 
-// Brave first: it is the most common Chromium on machines with no Chrome install.
 const CHROME_CANDIDATES = [
   "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
   "/Applications/Brave Browser.app/Contents/MacOS/Brave Browser",
@@ -673,17 +502,11 @@ const CHROME_CANDIDATES = [
   "/usr/bin/chromium-browser",
 ];
 
-/**
- * Labels that read destructive. Controls matching these are skipped by default
- * during automated interaction — crawling someone's admin panel should not
- * delete anything. Override with includeDestructive / --include-destructive.
- */
 const DESTRUCTIVE_LABEL =
   /\b(delete|remove|destroy|drop|erase|wipe|purge|log ?out|sign ?out|deactivate|deregister|unsubscribe|revoke|cancel subscription|close account|reset)\b/i;
 
 const FIELD_TAGS = new Set(["input", "textarea", "select"]);
 
-/** Type-appropriate sample data, so a field is tested with something it may accept. */
 const SAMPLE_INPUT: Record<string, string> = {
   email: "flamingo@example.com",
   password: "Fl4mingo!test",
@@ -696,14 +519,6 @@ const SAMPLE_INPUT: Record<string, string> = {
   text: "flamingo test",
 };
 
-/**
- * Render an observation as compact text.
- *
- * An agent loop re-reads this every turn, so its size is multiplied by the number
- * of steps. The JSON form spends most of its bytes on field names, a boundingBox
- * that duplicates the centre, and document coordinates only `scrollScan` needs —
- * none of which the loop reads. This keeps exactly what drives the next decision.
- */
 export function renderObservation(o: Observation): string {
   const lines: string[] = [];
   const scroll = o.scroll.maxY > 0 ? ` | scroll ${o.scroll.y}/${o.scroll.maxY}${o.scroll.atBottom ? " (bottom)" : ""}` : "";
@@ -740,31 +555,22 @@ export function renderObservation(o: Observation): string {
   return lines.join("\n");
 }
 
-/**
- * A navigation cancelled because another one superseded it — a meta refresh, a
- * script redirect, a click that navigated. The page is fine; our request simply
- * lost the race, so retrying once is the right answer rather than surfacing a
- * raw Cocoa or Chromium error code.
- */
 function isCancelledNavigation(e: unknown): boolean {
   const msg = String((e as Error)?.message ?? e);
   return /-999|cancell?ed|ERR_ABORTED|NS_BINDING_ABORTED/i.test(msg);
 }
 
-/** A browser host that died underneath us, as opposed to a real usage error. */
 function isTransientHostFailure(e: unknown): boolean {
   const msg = String((e as Error)?.message ?? e);
   return /host process|killed by signal|WebView closed|ERR_WEBVIEW/i.test(msg);
 }
 
-/** The APIs that cannot work without CDP, named here so the error can list them. */
 const CHROME_ONLY = "interceptTraffic, hoverCoordinate, and HTTP status codes in scanBrokenAssets";
 
 export class Engine {
   readonly backend: Backend;
 
   private _view: Bun.WebView;
-  /** The underlying Bun.WebView. Public escape hatch for anything not wrapped here. */
   get view(): Bun.WebView {
     return this._view;
   }
@@ -780,7 +586,6 @@ export class Engine {
   private shotSeq = 0;
   private closed = false;
   private viewOptions: Bun.WebView.ConstructorOptions;
-  /** A navigation that timed out leaves the view permanently unable to navigate. */
   private navigationPoisoned = false;
   private recycles = 0;
   private readonly evaluateTimeoutMs: number;
@@ -798,8 +603,6 @@ export class Engine {
     let backend: Bun.WebView.Backend;
     if (this.backend === "chrome") {
       const path = opts.chromePath ?? Bun.env.BUN_CHROME_PATH ?? CHROME_CANDIDATES.find((p) => existsSync(p));
-      // url:false keeps us from auto-attaching to the user's own running Chrome,
-      // which would pop an "Allow remote debugging?" dialog on every connection.
       backend = { type: "chrome", url: false, ...(path ? { path } : {}) };
     } else {
       backend = "webkit";
@@ -810,35 +613,24 @@ export class Engine {
       height: this.height,
       backend,
       ...(opts.profileDirectory ? { dataStore: { directory: opts.profileDirectory } } : {}),
-      // Wired at construction so page errors are captured before any navigation.
       console: (type: string, ...args: unknown[]) => this.pushConsole(type, args),
     };
     this._view = this.buildView();
   }
 
-  /** Construct a view and attach the listeners every view needs. */
   private buildView(): Bun.WebView {
     const view = new Bun.WebView(this.viewOptions);
     view.onNavigated = () => { this.navCount++; };
     return view;
   }
 
-  /**
-   * Replace a view that can no longer navigate.
-   *
-   * Once a navigation is left pending — a server that accepts the connection and
-   * never answers — every later navigate on that view throws ERR_INVALID_STATE,
-   * and neither reload() nor anything else clears it. Rebuilding is the only
-   * recovery. The console and network buffers live on the Engine, so nothing
-   * recorded so far is lost; one hung link cannot kill a whole crawl.
-   */
   private async recycleView(): Promise<void> {
     const old = this._view;
     this._view = this.buildView();
     this.navigationPoisoned = false;
     this.evalChain = Promise.resolve();
     this.recycles++;
-    try { old.close(); } catch { /* already gone */ }
+    try { old.close(); } catch {                    }
     await this._view.navigate("about:blank");
     await this._view.resize(this.width, this.height);
     if (this.backend === "chrome") await this.enableNetwork();
@@ -850,9 +642,6 @@ export class Engine {
     try {
       await engine.initialise(opts.url);
     } catch (e) {
-      // The browser host process is shared by every view in this process, and can
-      // be torn down underneath one that is still starting. Rebuilding respawns
-      // it, which turns a transient death into a hiccup instead of a failed run.
       if (!isTransientHostFailure(e)) {
         engine.close();
         throw e;
@@ -869,21 +658,12 @@ export class Engine {
   }
 
   private async initialise(url?: string): Promise<void> {
-    // about:blank first: it establishes the CDP session, which is what lets
-    // Network.enable be wired BEFORE the first real navigation. Enabling after
-    // would miss every request the page fires on load — including the failures.
     await this.view.navigate("about:blank");
-    // The two backends read the constructor's width/height differently: webkit
-    // sizes the CSS viewport, chrome sizes the outer window and loses ~81px to
-    // browser chrome even headless. resize() means viewport on both, so this
-    // makes "the viewport you asked for" true regardless of backend.
     await this.view.resize(this.width, this.height);
     if (this.backend === "chrome") await this.enableNetwork();
     await this.installErrorCapture();
     if (url) await this.goto(url);
   }
-
-  // ---------------------------------------------------------------- internals
 
   private pushConsole(type: string, args: unknown[]) {
     const text = args
@@ -893,7 +673,6 @@ export class Engine {
     if (this.consoleBuf.length > this.cap) this.consoleBuf.shift();
   }
 
-  /** Subscribe to a CDP event and hand the listener just the params. */
   private onCdp(event: string, fn: (data: any) => void) {
     this.view.addEventListener(event, (e) => fn((e as MessageEvent).data));
   }
@@ -926,11 +705,6 @@ export class Engine {
     });
   }
 
-  /**
-   * Start capturing uncaught errors. On chrome the hook is registered to run
-   * before any page script, so load-time throws are caught too; on webkit it can
-   * only be installed once a document exists, so it catches everything after load.
-   */
   private async installErrorCapture(): Promise<void> {
     if (this.backend === "chrome") {
       const source = installErrorForwarder.replace(/^\(\(\) => \{/, "(() => {");
@@ -948,20 +722,11 @@ export class Engine {
     );
   }
 
-  /**
-   * Run an expression in the page, with a watchdog.
-   *
-   * A blocked renderer never answers — a native `<select>` popup is the known
-   * cause, and there is no reason to assume it is the only one. Rather than hang
-   * forever we abandon the stuck view, rebuild it, and report it. The buffers
-   * survive because they live on the Engine.
-   */
   private async evaluateGuarded<T>(expr: string): Promise<T> {
     let timer: ReturnType<typeof setTimeout> | undefined;
     const stalled = new Promise<"stalled">((resolve) => {
       timer = setTimeout(() => resolve("stalled"), this.evaluateTimeoutMs);
     });
-    // The abandoned promise must not surface later as an unhandled rejection.
     const pending = this._view.evaluate<T>(expr).then((value) => ({ value }));
     pending.catch(() => {});
     const outcome = await Promise.race([pending, stalled]);
@@ -976,8 +741,6 @@ export class Engine {
     return outcome.value;
   }
 
-  // Bun.WebView allows only one evaluate() in flight per view and throws
-  // ERR_INVALID_STATE on a second, so all page calls funnel through one chain.
   private evaluate<T>(expr: string): Promise<T> {
     const run = this.evalChain.then(
       () => this.evaluateGuarded<T>(expr),
@@ -990,17 +753,6 @@ export class Engine {
     return run;
   }
 
-  // ------------------------------------------------------------- navigation
-
-  /**
-   * Navigate and wait for the main frame load to finish.
-   *
-   * The timeout is not optional comfort: `navigate()` resolves on load, so a
-   * server that accepts the connection and never finishes the response would
-   * otherwise hang the engine forever. On timeout we return rather than throw —
-   * a page stuck on one slow asset usually has a perfectly testable DOM — and
-   * flag it so the caller can decide.
-   */
   async goto(
     url: string,
     { timeoutMs = 30_000 } = {},
@@ -1011,12 +763,8 @@ export class Engine {
       ({ timedOut } = await this.navigationOp(() => this.view.navigate(url), timeoutMs));
     } catch (e) {
       if (!isCancelledNavigation(e)) throw e;
-      // Something on the previous page redirected while we were leaving it.
       ({ timedOut } = await this.navigationOp(() => this.view.navigate(url), timeoutMs));
     }
-    // A navigation replaces the JS context, taking the error hook with it. The
-    // same round trip returns the title, because WebView.title is populated
-    // asynchronously by the host and is simply empty on a page that took a moment.
     const page = await this.evaluate<{ title: string; url: string }>(installErrorForwarder).catch(() => null);
     return {
       url: page?.url ?? this.view.url,
@@ -1026,13 +774,6 @@ export class Engine {
     };
   }
 
-  /**
-   * Go back in history.
-   *
-   * Bun 1.4.0, chrome backend: `goBack()` never resolves when there is no further
-   * history, and the pending navigation it leaves behind poisons the view for
-   * good. Guarding it turns an unrecoverable hang into a reported timeout.
-   */
   async goBack({ timeoutMs = 10_000 } = {}): Promise<{ url: string; timedOut: boolean }> {
     await this.healIfPoisoned();
     const { timedOut } = await this.navigationOp(
@@ -1042,7 +783,6 @@ export class Engine {
     return { url: this.view.url, timedOut };
   }
 
-  /** Reload the current page. */
   async reload({ timeoutMs = 30_000 } = {}): Promise<{ url: string; timedOut: boolean }> {
     await this.healIfPoisoned();
     const { timedOut } = await this.navigationOp(() => this.view.reload(), timeoutMs);
@@ -1056,14 +796,6 @@ export class Engine {
     return true;
   }
 
-  /**
-   * Run a navigation with a deadline.
-   *
-   * Every navigation primitive here can fail to resolve — a server that never
-   * answers, or `goBack()` past the start of history — and each one leaves the
-   * view unable to navigate again. Timing out and marking the view for rebuild is
-   * the only recovery.
-   */
   private async navigationOp(op: () => Promise<void>, timeoutMs: number): Promise<{ timedOut: boolean }> {
     let timer: ReturnType<typeof setTimeout> | undefined;
     let failure: unknown;
@@ -1081,10 +813,6 @@ export class Engine {
     return { timedOut: outcome === "timeout" };
   }
 
-  /**
-   * Wait until no network request has started for `idleMs`.
-   * Chrome backend only — webkit has no request visibility, so it just sleeps.
-   */
   async waitForIdle({ idleMs = 500, timeoutMs = 10_000 } = {}): Promise<{ idle: boolean }> {
     if (this.backend !== "chrome") {
       await Bun.sleep(idleMs);
@@ -1105,14 +833,6 @@ export class Engine {
     return { idle: false };
   }
 
-  /**
-   * Wait until something appears.
-   *
-   * The missing half of click-then-check: an agent that clicks "Save" needs to
-   * wait for the confirmation, and without this it can only sleep and hope.
-   * Polls at `pollMs` and returns as soon as the element exists and is visible,
-   * in the same shape as a tree entry so it can be clicked straight away.
-   */
   async waitFor({
     selector,
     textContains,
@@ -1135,7 +855,6 @@ export class Engine {
       try {
         hit = await this.evaluate<Record<string, unknown> | null>(probe);
       } catch {
-        // A navigation mid-wait destroys the context; keep waiting for the new one.
       }
       if (hit) return { found: true, waitedMs: Date.now() - started, element: hit };
       if (Date.now() >= deadline) return { found: false, waitedMs: Date.now() - started, element: null };
@@ -1143,7 +862,6 @@ export class Engine {
     }
   }
 
-  /** Wait until an element matching the criteria is gone (a spinner, a modal). */
   async waitForGone({
     selector,
     textContains,
@@ -1174,17 +892,6 @@ export class Engine {
     }
   }
 
-  /**
-   * A single step of the agent loop.
-   *
-   * An agent working towards a goal needs the same four things every turn: where
-   * it is, what it can act on, whether anything broke, and whether its last
-   * action did anything. Assembling that from five separate calls costs five
-   * round trips and leaves the agent to diff the results itself.
-   *
-   * `newErrors` and `changed` are deltas since the previous observe(), which is
-   * what lets a loop tell progress from a no-op without keeping its own state.
-   */
   async observe({ maxElements = 40 }: { maxElements?: number } = {}): Promise<Observation> {
     const tree = await this.getInteractiveTree({ max: maxElements });
 
@@ -1206,8 +913,6 @@ export class Engine {
         ...(n.errorText ? { errorReason: n.errorText } : {}),
       }));
 
-    // A cheap fingerprint of the observable state: if it is identical, the last
-    // action achieved nothing, which is exactly what a loop needs to know.
     const signature = [
       tree.url,
       tree.scroll.y,
@@ -1234,19 +939,6 @@ export class Engine {
     };
   }
 
-  // ------------------------------------------------- 4.1 visual and layout
-
-  /**
-   * 1. Screenshot the viewport.
-   *
-   * Returns a file path rather than base64 by default: a 1080p PNG is ~1-3MB of
-   * base64 text, which would defeat the point of a context-preserving tool. Pass
-   * `base64: true` when you actually need the bytes inline.
-   *
-   * Note `deviceScaleFactor`: on a retina display the image is 2x the CSS size,
-   * while every coordinate this library returns is CSS-space. Divide image pixels
-   * by this factor before feeding them back into click coordinates.
-   */
   async captureViewport(
     opts: { format?: "png" | "jpeg" | "webp"; quality?: number; path?: string; base64?: boolean } = {},
   ) {
@@ -1273,12 +965,6 @@ export class Engine {
     };
   }
 
-  /**
-   * 2. Resize through viewports and report horizontal overflow at each.
-   *
-   * There is no "layout settled" signal in either backend, so `settleMs` is a
-   * heuristic wait after each resize. Raise it for animation-heavy pages.
-   */
   async auditResponsiveness(
     opts: { viewports?: Array<{ width: number; height: number }>; settleMs?: number; maxOffenders?: number } = {},
   ) {
@@ -1310,17 +996,10 @@ export class Engine {
     return { violations, viewportsTested: viewports.length };
   }
 
-  /** 3. Explain whether a click at (x, y) reaches an interactive element, and what blocks it. */
   async detectPointerBlocker({ x, y }: { x: number; y: number }) {
     return this.evaluate<any>(hitTest(x, y));
   }
 
-  // ------------------------------------------ 4.2 hardware-level interaction
-
-  /**
-   * 4. Click. Pass coordinates for raw dispatch, or a selector to wait for the
-   * element to become actionable first (attached, visible, stable, not obscured).
-   */
   async clickCoordinate(
     opts:
       | { x: number; y: number; button?: "left" | "right" | "middle"; clickCount?: 1 | 2 | 3 }
@@ -1335,17 +1014,6 @@ export class Engine {
     return { success: true, targetCoordinates: { x: opts.x, y: opts.y } };
   }
 
-  /**
-   * 5. Type into the focused element.
-   *
-   * Default uses WebView's InsertText path: atomic and fast, but fires no
-   * keydown. Set `realKeys` (or any `typingDelayMs`) to send per-character key
-   * events instead, for fields whose validation listens to keydown.
-   *
-   * The `evaluate("1")` after each key is a required barrier, not a nicety —
-   * keyboard dispatch has no completion signal, and without it characters
-   * arrive late and out of order.
-   */
   async typeInput({
     text,
     typingDelayMs = 0,
@@ -1361,31 +1029,24 @@ export class Engine {
     }
     for (const ch of text) {
       await this.view.press(ch);
-      await this.evaluate("1"); // barrier: see doc comment
+      await this.evaluate("1");
       if (typingDelayMs > 0) await Bun.sleep(typingDelayMs);
     }
     return { success: true, charactersTyped: [...text].length, mode: "keyEvents" as const };
   }
 
-  /** Press a named key (`"Enter"`, `"Tab"`, `"Escape"`, ...) or a chord. */
   async pressKey({ key, modifiers }: { key: string; modifiers?: Array<"Shift" | "Control" | "Alt" | "Meta"> }) {
     await this.view.press(key, modifiers ? { modifiers } : undefined);
     await this.evaluate("1");
     return { success: true, key };
   }
 
-  /**
-   * 6. Hover to reveal popovers and CSS dropdowns.
-   *
-   * Chrome only: WebView exposes no hover primitive, so this goes through CDP.
-   */
   async hoverCoordinate({ x, y }: { x: number; y: number }) {
     this.requireChrome("hoverCoordinate");
     await this.view.cdp("Input.dispatchMouseEvent", { type: "mouseMoved", x, y, button: "none", buttons: 0 });
     return { success: true, targetCoordinates: { x, y } };
   }
 
-  /** Scroll by a pixel delta, or bring a selector into view. */
   async scroll(opts: { dx?: number; dy?: number } | { selector: string; block?: "start" | "center" | "end" | "nearest" }) {
     if ("selector" in opts) {
       await this.view.scrollTo(opts.selector, { block: opts.block ?? "center" });
@@ -1395,9 +1056,6 @@ export class Engine {
     return { success: true, delta: { dx: opts.dx ?? 0, dy: opts.dy ?? 0 } };
   }
 
-  // ------------------------------------------- 4.3 integration and system sync
-
-  /** 7. Read buffered network traffic. Chrome only. */
   async interceptTraffic({ filterUrlPattern }: { filterUrlPattern?: string } = {}) {
     this.requireChrome("interceptTraffic");
     const re = filterUrlPattern ? new RegExp(filterUrlPattern) : null;
@@ -1405,23 +1063,11 @@ export class Engine {
     return { traffic, total: this.networkBuf.length, filtered: traffic.length };
   }
 
-  /**
-   * 8. Read buffered console output and page exceptions.
-   * Works on both backends — capture starts at construction, before any navigation.
-   */
   async captureRuntimeLogs({ type }: { type?: string } = {}) {
     const consoleLogs = type ? this.consoleBuf.filter((l) => l.type === type) : [...this.consoleBuf];
     return { consoleLogs, total: this.consoleBuf.length, errors: this.consoleBuf.filter((l) => l.type === "error").length };
   }
 
-  /**
-   * 9. Click a coordinate and report whether anything at all happened.
-   *
-   * Signals watched: DOM mutations (MutationObserver installed before the click),
-   * console output, navigation, and — chrome only — network requests. On webkit
-   * `registeredNetworkRequests` is null rather than 0, so a missing signal is
-   * never mistaken for a measured zero.
-   */
   async detectDeadClicks({
     x,
     y,
@@ -1449,8 +1095,6 @@ export class Engine {
     let reason = "timeout";
     const deadline = started + timeoutMs;
 
-    // Poll instead of sleeping the full window: a live control usually answers in
-    // one or two ticks, so this is the difference between ~20ms and ~600ms per click.
     for (;;) {
       let probe: ReactionProbe | undefined;
       try {
@@ -1473,8 +1117,6 @@ export class Engine {
       if (mutations > 0) { reason = "dom"; break; }
       if (focusChanged) { reason = "focus"; break; }
       if (dialogs > 0) { reason = "dialog"; break; }
-      // history.pushState fires no load event, so an SPA route change is
-      // invisible to navigation tracking — the URL is the only tell.
       if (urlChanged) { reason = "spa-navigation"; break; }
       if (this.navCount > nav0) { reason = "navigation"; break; }
       if (this.networkBuf.length > net0) { reason = "network"; break; }
@@ -1483,7 +1125,7 @@ export class Engine {
       await Bun.sleep(pollMs);
     }
 
-    try { await this.evaluate(stopReactionProbe); } catch { /* context gone */ }
+    try { await this.evaluate(stopReactionProbe); } catch {                    }
 
     const navigated = this.navCount > nav0 || contextLost;
     const networkRequests = this.backend === "chrome" ? this.networkBuf.length - net0 : null;
@@ -1508,18 +1150,10 @@ export class Engine {
     };
   }
 
-  // ------------------------------------------- 4.4 agentic context and health
-
-  /** 10. Compact, viewport-filtered list of everything an agent can act on. */
   async getInteractiveTree({ max = 100 }: { max?: number } = {}): Promise<InteractiveTree> {
     return this.evaluate<InteractiveTree>(interactiveTree(max));
   }
 
-  /**
-   * 11. Broken images, stylesheets and scripts.
-   * HTTP status codes are joined in from the network buffer on chrome; on webkit
-   * the DOM alone cannot see them, so `status` is omitted and the flag says so.
-   */
   async scanBrokenAssets() {
     const found = await this.evaluate<Array<{ type: string; source: string }>>(brokenAssetsProbe);
     const statusCodesAvailable = this.backend === "chrome";
@@ -1530,7 +1164,6 @@ export class Engine {
       return { ...a, ...(net?.status !== undefined ? { status: net.status } : {}), ...(net?.errorText ? { errorReason: net.errorText } : {}) };
     });
 
-    // Chrome also sees failures the DOM never exposes (fonts, XHR, preloads).
     if (statusCodesAvailable) {
       const seen = new Set(brokenAssets.map((a) => a.source));
       for (const e of this.networkBuf) {
@@ -1543,7 +1176,6 @@ export class Engine {
     return { brokenAssets, statusCodesAvailable };
   }
 
-  /** 12. Consolidated scorecard. Responsive auditing is opt-in because it resizes the page. */
   async compileHealthReport(opts: { viewports?: Array<{ width: number; height: number }>; deadClickTargets?: Array<{ x: number; y: number }> } = {}) {
     const logs = await this.captureRuntimeLogs();
     const assets = await this.scanBrokenAssets();
@@ -1577,22 +1209,9 @@ export class Engine {
     };
   }
 
-  /**
-   * Click every actionable control and report the ones that do nothing.
-   *
-   * Composes three of the APIs above: the tree supplies the targets,
-   * detectDeadClicks decides whether anything happened, and when nothing did,
-   * detectPointerBlocker explains why — an overlay swallowing the click reads
-   * very differently from a button with no handler.
-   *
-   * The page reloads only after a click that *changed* something. A dead click
-   * by definition leaves the layout alone, so the coordinates captured up front
-   * stay valid and cost nothing to reuse.
-   */
   async crawl({ max = 20, dwellMs = 400 }: { max?: number; dwellMs?: number } = {}) {
     const targetUrl = this.view.url;
     const tree = await this.getInteractiveTree({ max });
-    // A <select> opens a blocking native popup, so it is never clicked.
     const candidates = tree.interactiveElements.filter((el) => !el.disabled && !el.nativePicker);
     const skipped = tree.interactiveElements.length - candidates.length;
 
@@ -1607,7 +1226,6 @@ export class Engine {
       const clicked = await this.detectDeadClicks({ x: el.center.x, y: el.center.y, timeoutMs: dwellMs });
       if (!clicked.isDeadClick) {
         alive++;
-        // Whatever it changed invalidates the coordinates we captured; reset.
         await this.goto(targetUrl);
         continue;
       }
@@ -1637,17 +1255,6 @@ export class Engine {
     };
   }
 
-  /**
-   * Scroll the whole page and assemble one map of it.
-   *
-   * A single viewport is a keyhole: the tree honestly reports only what is on
-   * screen, so anything below the fold is invisible to an agent. This walks the
-   * page in overlapping steps and merges what it sees into document-space
-   * coordinates, so every control can be reached later with scrollTo.
-   *
-   * Also answers two questions a static look cannot: does the page lazy-load
-   * (its height grew while scrolling), and what is pinned over the content.
-   */
   async scrollScan({
     maxSteps = 20,
     overlap = 0.15,
@@ -1676,9 +1283,6 @@ export class Engine {
       const scrollY = tree.scroll.y;
 
       for (const el of tree.interactiveElements) {
-        // Identity comes from the unclipped document position: an element that is
-        // half off-screen has a different clipped centre at every scroll step, and
-        // keying on that records the same control several times.
         const key = el.pinned ? `pinned:${el.ref}` : `${el.ref}@${el.documentY}`;
         if (elements.has(key)) continue;
         if (elements.size >= maxElements) { truncated++; continue; }
@@ -1696,7 +1300,6 @@ export class Engine {
       pageHeight = m.pageHeight;
 
       if (m.scrollY >= m.maxScrollY) { reachedBottom = true; steps++; break; }
-      // A page that refuses to move is done, however much height it claims.
       if (m.scrollY === lastScrollY) { steps++; break; }
       lastScrollY = m.scrollY;
 
@@ -1711,7 +1314,6 @@ export class Engine {
       reachedBottom,
       pageHeight,
       viewportHeight: first.viewportHeight,
-      // Height growing mid-scroll is the signature of infinite scroll / lazy loading.
       lazyLoaded: pageHeight > first.pageHeight,
       initialPageHeight: first.pageHeight,
       sticky,
@@ -1723,16 +1325,6 @@ export class Engine {
     };
   }
 
-  /**
-   * Walk the whole page and exercise everything on it.
-   *
-   * `crawl` tests one viewport; this scrolls and tests the lot, and it types into
-   * fields instead of only clicking, so form controls are checked for actually
-   * accepting input rather than merely taking focus.
-   *
-   * Controls whose label reads destructive are skipped by default and reported as
-   * skipped — pointing this at a real admin panel should not delete anything.
-   */
   async interact({
     maxSteps = 12,
     dwellMs = 400,
@@ -1751,10 +1343,6 @@ export class Engine {
     const startUrl = this.view.url;
     const consoleAtStart = this.consoleBuf.length;
 
-    // Map the whole page first, then visit each control by its document position.
-    // Sweeping viewport-by-viewport looks simpler but is not robust: a #hash link
-    // scrolls the page itself, and the sweep then loses its place and skips
-    // whole sections. Driving from a document-space list is deterministic.
     const map = await this.scrollScan({ maxSteps, settleMs, maxElements: maxControls * 4 });
 
     const seenRefs = new Set<string>();
@@ -1777,8 +1365,6 @@ export class Engine {
         continue;
       }
 
-      // Bring it into view, then find it again: the coordinates used to click are
-      // always read after the scroll settles, never carried over from the map.
       this.onProgress("interact", target.ref);
       const live = await this.locate(target, map.viewportHeight);
       if (!live) { skipped.push({ ref: target.ref, reason: "not-reachable-after-scroll" }); continue; }
@@ -1814,12 +1400,6 @@ export class Engine {
     };
   }
 
-  /**
-   * Bring a mapped element into view and find it again there.
-   *
-   * Coordinates are always re-read after the scroll settles; the ones in the map
-   * are only ever used to decide where to scroll to.
-   */
   private async locate(target: InteractiveElement, viewportHeight: number): Promise<InteractiveElement | null> {
     if (!target.pinned) {
       await this.scrollToY(Math.max(0, target.documentY - Math.round(viewportHeight / 2)));
@@ -1834,10 +1414,6 @@ export class Engine {
           Math.abs(e.documentY - target.documentY) < Math.abs(best.documentY - target.documentY) ? e : best);
   }
 
-  /**
-   * Wait for layout to stop changing, up to `maxMs`.
-   * Falls back to a plain sleep if the page cannot run the probe.
-   */
   private async settle(maxMs: number): Promise<void> {
     try {
       await this.evaluate<{ settled: boolean; ms: number }>(settleProbe(maxMs));
@@ -1846,14 +1422,11 @@ export class Engine {
     }
   }
 
-  /** Scroll to an absolute document position. */
   private async scrollToY(y: number): Promise<void> {
     await this.evaluate(`(() => { scrollTo(0, ${Math.max(0, Math.round(y))}); return 1; })()`);
   }
 
-  /** Type into a field and confirm the value actually landed. */
   private async exerciseField(el: InteractiveElement): Promise<Record<string, unknown>> {
-    // Read a <select> without clicking it: the popup would block the renderer.
     if (el.nativePicker) {
       const info = await this.evaluate<{ value: string; optionCount: number; options: string[] } | null>(
         selectAt(el.center.x, el.center.y),
@@ -1870,8 +1443,6 @@ export class Engine {
     await this.view.type(sample);
     const after = await this.evaluate<{ value: string | null } | null>(focusedFieldValue);
     const got = after?.value ?? "";
-    // A field that silently drops what it was given is worth knowing about;
-    // a number input rejecting letters is correct, not broken, so compare loosely.
     const accepted = got.length > 0;
     return {
       ref: el.ref,
@@ -1883,10 +1454,7 @@ export class Engine {
     };
   }
 
-  /** Click a control and classify what happened. */
   private async exerciseControl(el: InteractiveElement, dwellMs: number): Promise<Record<string, unknown>> {
-    // A link to another document is alive by construction, and clicking it only
-    // navigates away from the page being tested and forces a reload to come back.
     if (el.leavesPage) {
       return { ref: el.ref, text: el.text, kind: "link", status: "alive", reason: "leaves-page", href: el.href };
     }
@@ -1905,30 +1473,17 @@ export class Engine {
     };
   }
 
-  /** Is the element named by `ref` still the thing at (x, y)? */
   private async stillThere(ref: string, x: number, y: number): Promise<boolean> {
     const hit = await this.detectPointerBlocker({ x, y });
     return hit.intendedElement === ref || hit.topElement === ref;
   }
 
-  /**
-   * Try to break the page on purpose.
-   *
-   * Ordinary testing exercises the happy path one step at a time. Real users
-   * double-click, navigate away mid-request, refresh halfway through and scroll
-   * while something is loading — which is where unhandled rejections and torn
-   * state actually live. Each scenario is a fixed, repeatable hostile pattern;
-   * nothing here is random, so a failure can be reproduced exactly.
-   */
   async stressTest({
     maxTargets = 5,
     settleMs = 250,
   }: { maxTargets?: number; settleMs?: number } = {}) {
     const startUrl = this.view.url;
 
-    // Stress whole-page, not just the first viewport, and only controls that
-    // actually react: a button with no handler has nothing to break, so
-    // hammering it proves nothing.
     const map = await this.scrollScan({ maxSteps: 8, settleMs: 100 });
     const candidates = map.elements.filter(
       (e) =>
@@ -1964,8 +1519,6 @@ export class Engine {
     }
 
     const scenarios: Array<Record<string, unknown>> = [];
-    // Errors the page emits on any clean load. A scenario that reloads would
-    // otherwise "find" the page's own boot noise every single time.
     const baselineErrors = new Set(
       this.consoleBuf.filter((l) => l.type === "error").map((l) => l.text),
     );
@@ -1990,16 +1543,13 @@ export class Engine {
       const errors = this.consoleBuf
         .slice(before)
         .filter((l) => l.type === "error" && !baselineErrors.has(l.text));
-      // "Responsive" means the page can still run script at all.
       let responsive = false;
       try {
         responsive = (await this.evaluate<number>("1")) === 1;
-      } catch { /* context gone */ }
+      } catch {                    }
       scenarios.push({
         name,
         target: target.ref,
-        // A scenario that threw never exercised the page; reporting it as a pass
-        // would be worse than not running it at all.
         ran: threw === null,
         errorsTriggered: errors.length,
         errors: errors.map((l) => l.text).slice(0, 5),
@@ -2010,8 +1560,6 @@ export class Engine {
     };
 
     for (const target of targets) {
-      // click() resolves when the event has been dispatched, not when an async
-      // handler finishes — so the disruption below genuinely lands mid-flight.
       await run("rapid-click", target, async (at) => {
         for (let i = 0; i < 5; i++) await this.view.click(at.center.x, at.center.y);
       });
@@ -2066,9 +1614,6 @@ export class Engine {
     };
   }
 
-  // -------------------------------------------------------------- lifecycle
-
-  /** Close the view and release its browser process. Idempotent. */
   close(): void {
     if (this.closed) return;
     this.closed = true;
@@ -2085,13 +1630,6 @@ export class Engine {
   }
 }
 
-// =========================================================================
-// SECTION 3 — MCP server (stdio JSON-RPC, no SDK)
-//
-// Line-delimited JSON-RPC on stdin/stdout. Nothing but protocol frames may be
-// written to stdout, so page console output goes to the engine's buffer.
-// =========================================================================
-
 const numSchema = { type: "number" } as const;
 const strSchema = { type: "string" } as const;
 const boolSchema = { type: "boolean" } as const;
@@ -2103,12 +1641,7 @@ interface Tool {
   description: string;
   inputSchema: Record<string, unknown>;
   run: (e: Engine, a: any) => Promise<unknown>;
-  /**
-   * This tool changes the page, so its result carries a fresh observation.
-   * An agent loop otherwise spends half its calls asking "what happened?".
-   */
   acts?: true;
-  /** Returns an observation that is rendered compactly unless format:"json". */
   compactable?: true;
 }
 
@@ -2304,13 +1837,6 @@ const TOOLS: Record<string, Tool> = {
   },
 };
 
-/**
- * Write one protocol frame and resolve once it has actually reached the OS.
- *
- * `process.stdout.write` buffers when stdout is a pipe, so a reply written just
- * before the process exits can be lost. Every caller awaits this, which makes
- * the loop below both ordered and flush-safe.
- */
 function send(msg: unknown): Promise<void> {
   return new Promise((resolve) => {
     process.stdout.write(JSON.stringify(msg) + "\n", () => resolve());
@@ -2319,7 +1845,6 @@ function send(msg: unknown): Promise<void> {
 
 async function handle(msg: any, getEngine: () => Promise<Engine>) {
   const { id, method, params } = msg;
-  // Notifications carry no id and take no response.
   if (id === undefined) return;
 
   try {
@@ -2359,8 +1884,6 @@ async function handle(msg: any, getEngine: () => Promise<Engine>) {
         const engine = await getEngine();
         const args = params.arguments ?? {};
         const result = await tool.run(engine, args);
-        // An action's whole point is its effect, so hand back the resulting state
-        // in the same round trip unless the caller explicitly opts out.
         const compact = args.format !== "json";
         let text: string;
         if (tool.compactable) {
@@ -2375,8 +1898,6 @@ async function handle(msg: any, getEngine: () => Promise<Engine>) {
         }
         return send({ jsonrpc: "2.0", id, result: { content: [{ type: "text", text }] } });
       } catch (e: any) {
-        // Tool failures are results, not protocol errors — the agent should see
-        // the message (e.g. "requires backend: chrome") and adapt.
         return send({
           jsonrpc: "2.0",
           id,
@@ -2393,10 +1914,6 @@ async function handle(msg: any, getEngine: () => Promise<Engine>) {
   }
 }
 
-/**
- * Serve the MCP protocol on stdin/stdout until the client closes stdin.
- * The browser is launched lazily on the first tool call, not at startup.
- */
 export async function runMcpServer(opts: EngineOptions = {}): Promise<void> {
   const state: { engine: Engine | null } = { engine: null };
   const getEngine = async (): Promise<Engine> => {
@@ -2421,27 +1938,11 @@ export async function runMcpServer(opts: EngineOptions = {}): Promise<void> {
     }
   }
 
-  // stdin closed: the client is gone.
-  // Drain anything still queued before tearing the browser down and exiting.
   await new Promise<void>((resolve) => process.stdout.write("", () => resolve()));
   state.engine?.close();
   Bun.WebView.closeAll();
 }
 
-// ===========================================================================
-// SECTION 4 — Command-line interface
-//
-// Manual argv parsing (no yargs/commander), ANSI escapes for colour (no chalk).
-// Contract: stdout carries data, stderr carries diagnostics, and `--json` puts
-// nothing but a single JSON document on stdout so it can be piped safely.
-// ===========================================================================
-
-/**
- * The agent-facing skill, written by `flamingo init`.
- *
- * Kept here rather than as a separate file so the project stays one source file
- * and the skill can never drift from the tool surface it documents.
- */
 export const SKILL_MD = `---
 name: flamingo
 description: Drive and test a running web frontend through a real browser. Use when asked to test, QA, debug, explore or interact with a web app - to find dead buttons, broken assets, layout breaks, console errors, or to verify a UI flow actually works end to end.
@@ -2543,10 +2044,6 @@ confirm with \\\`detectDeadClicks\\\` at the same coordinates.
 
 const MCP_SERVER_KEY = "flamingo";
 
-/**
- * Sent in the initialize response, so every MCP client gets the operating
- * instructions — not only the ones that also read a skill file.
- */
 export const MCP_INSTRUCTIONS = `flamingo drives a real browser in a loop: observe, act, observe.
 
 Call \`observe\` to see where you are. Then act (clickCoordinate, typeInput, pressKey,
@@ -2588,10 +2085,6 @@ stressTest, auditResponsiveness.`;
 const VERSION = "0.1.0";
 const TAGLINE = "AI Native Frontend Testing Toolkit";
 
-/**
- * One metadata table drives the global help, the per-command help and the
- * machine-readable `schema` output, so they cannot drift apart.
- */
 interface CommandSpec {
   args: string;
   summary: string;
@@ -2827,7 +2320,6 @@ EXAMPLES
 ${c.examples.map((e) => "  " + e).join("\n")}`;
 }
 
-/** Help text for flags that are specific to one command. */
 const LOCAL_FLAG_HELP: Record<string, string> = {
   "--viewports": "Comma-separated, e.g. 1920x1080,768x1024,375x812",
   "--max": "Max elements to consider (tree 100, crawl 20)",
@@ -2847,7 +2339,6 @@ const LOCAL_FLAG_HELP: Record<string, string> = {
   "--json": "Emit a single JSON document on stdout, nothing else",
 };
 
-/** Exit codes, named so the call sites read as intent rather than magic numbers. */
 const EXIT = { ok: 0, problems: 1, usage: 2, runtime: 3 } as const;
 
 class UsageError extends Error {}
@@ -2867,10 +2358,6 @@ interface Parsed {
   flags: Map<string, string | true>;
 }
 
-/**
- * Manual argument parser. Accepts `--flag value`, `--flag=value` and boolean
- * flags; the first non-flag token is the command, the second is the URL.
- */
 function parseArgs(argv: string[]): Parsed {
   const flags = new Map<string, string | true>();
   const positional: string[] = [];
@@ -2891,7 +2378,6 @@ function parseArgs(argv: string[]): Parsed {
       flags.set(body.slice(0, eq), body.slice(eq + 1));
       continue;
     }
-    // A following token that is not itself a flag is this flag's value.
     const next = argv[i + 1];
     if (next !== undefined && !next.startsWith("-")) {
       flags.set(body, next);
@@ -2917,7 +2403,6 @@ function str(flags: Parsed["flags"], name: string): string | undefined {
   return typeof raw === "string" ? raw : undefined;
 }
 
-/** Parse `1920x1080,375x812` into viewport objects. */
 function parseViewports(spec: string): Array<{ width: number; height: number }> {
   return spec.split(",").map((pair) => {
     const m = /^(\d+)x(\d+)$/.exec(pair.trim());
@@ -2935,8 +2420,6 @@ function requireUrl(p: Parsed): string {
   }
   return p.url;
 }
-
-// -------------------------------------------------------------- human output
 
 function printAuditHuman(r: any) {
   const d = r.details;
@@ -3005,7 +2488,6 @@ function printScrollHuman(r: any) {
     console.log(`  ${cyan("pinned")}: ${r.sticky.map((s: any) => `${s.ref} (${s.position}, ${s.height}px)`).join(", ")}`);
   }
   for (const c of r.scrollableContainers ?? []) {
-    // Scrolling the page never reveals these; they need scrollTo(selector).
     console.log(`  ${yellow("scrolls separately")}: ${bold(c.ref)} hides ${c.hiddenPixelsY}px below its own fold`);
   }
   if (r.outline.length) {
@@ -3098,12 +2580,6 @@ function printResponsiveHuman(r: any) {
   console.log();
 }
 
-// ------------------------------------------------------------- introspection
-
-/**
- * Environment check. The first thing to run after installing, and the first
- * thing to ask for when something behaves oddly.
- */
 function runDoctor(json: boolean): number {
   const required = ">=1.4.0";
   const bunOk = Bun.semver.satisfies(Bun.version, required);
@@ -3144,11 +2620,6 @@ function runDoctor(json: boolean): number {
   return ok ? EXIT.ok : EXIT.problems;
 }
 
-/**
- * The whole API as one JSON document: every MCP tool with its schema, every CLI
- * command with its flags and exit codes. An agent reads this once instead of
- * reading the docs.
- */
 export function schemaDoc() {
   return {
     name: "@ayuxy027/flamingo",
@@ -3182,14 +2653,6 @@ export function schemaDoc() {
   };
 }
 
-/**
- * Wire flamingo into a project: an MCP server entry so an agent can drive the
- * browser, and a skill so it knows how.
- *
- * Merges rather than overwrites, and never touches an existing flamingo entry
- * without `--force`, because clobbering someone's `.mcp.json` is exactly the
- * kind of thing a setup command must not do.
- */
 async function runInit(p: Parsed, json: boolean): Promise<number> {
   const root = resolve(str(p.flags, "dir") ?? ".");
   const force = p.flags.has("force");
@@ -3197,8 +2660,6 @@ async function runInit(p: Parsed, json: boolean): Promise<number> {
   const wantMcp = !p.flags.has("skill-only");
   const actions: Array<{ path: string; action: string; detail?: string }> = [];
 
-  // Prefer the installed binary; fall back to this file's absolute path when
-  // running from a clone, so the generated config actually works either way.
   const selfPath = Bun.main;
   const installed = selfPath.includes("node_modules");
   const command = installed ? "bunx" : "bun";
@@ -3241,8 +2702,6 @@ async function runInit(p: Parsed, json: boolean): Promise<number> {
     }
   }
 
-  // Screenshots and scratch output land in .flamingo/; keep them out of git
-  // rather than leaving the user to discover a pile of PNGs in their next diff.
   const gitignore = join(root, ".gitignore");
   if (existsSync(gitignore)) {
     const current = readFileSync(gitignore, "utf8");
@@ -3271,8 +2730,6 @@ async function runInit(p: Parsed, json: boolean): Promise<number> {
   return EXIT.ok;
 }
 
-// ------------------------------------------------------------------ commands
-
 async function runCli(argv: string[]): Promise<number> {
   const p = parseArgs(argv);
 
@@ -3291,7 +2748,6 @@ async function runCli(argv: string[]): Promise<number> {
     console.log(JSON.stringify(schemaDoc(), null, 2));
     return EXIT.ok;
   }
-  // Colour is meaningless in a pipe and forbidden in --json output.
   COLOR = !json && !p.flags.has("no-color") && !Bun.env.NO_COLOR && Boolean(process.stdout.isTTY);
 
   const backend = (str(p.flags, "backend") ?? "webkit") as Backend;
@@ -3402,12 +2858,6 @@ async function runCli(argv: string[]): Promise<number> {
     Bun.WebView.closeAll();
   }
 }
-
-// ===========================================================================
-// SECTION 5 — Entry point
-//
-// Guarded so `import { Engine } from "./flamingo.ts"` stays a pure library import.
-// ===========================================================================
 
 if (import.meta.main) {
   try {

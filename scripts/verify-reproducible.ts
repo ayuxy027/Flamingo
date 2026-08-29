@@ -1,14 +1,4 @@
 #!/usr/bin/env bun
-/**
- * Reproducible-build proof. Compiles the binary twice to the *same* output path
- * and compares SHA-256 digests.
- *
- * The fixed path matters: Bun embeds the output filename in the executable, so
- * building to `a` and `b` legitimately produces different bytes. Reproducibility
- * is a claim about identical inputs, and the output path is an input.
- *
- *   bun run scripts/verify-reproducible.ts
- */
 
 import { rmSync, mkdirSync, renameSync, readFileSync } from "node:fs";
 

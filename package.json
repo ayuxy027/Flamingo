@@ -1,7 +1,7 @@
 {
   "name": "@ayuxy027/flamingo",
   "version": "0.1.0",
-  "description": "Unblind your agent. AI-native browser automation on Bun.WebView, with zero dependencies.",
+  "description": "AI Native Frontend Testing Toolkit. A browser your agent drives in a loop. One file, zero dependencies, built on Bun.",
   "type": "module",
   "module": "flamingo.ts",
   "main": "flamingo.ts",
@@ -14,6 +14,12 @@
   },
   "files": [
     "flamingo.ts",
+    "docs/api.md",
+    "docs/cli.md",
+    "docs/mcp-tools.md",
+    "docs/internals.md",
+    "skills",
+    "mcp",
     "README.md",
     "STDLIB.md",
     "LICENSE"
@@ -28,7 +34,8 @@
     "proof": "bun run scripts/dependency-proof.ts",
     "verify:build": "bun run scripts/verify-reproducible.ts",
     "docs": "bun run scripts/generate-docs.ts",
-    "docs:check": "bun run scripts/generate-docs.ts --check"
+    "docs:check": "bun run scripts/generate-docs.ts --check",
+    "website": "bun run scripts/serve-website.ts"
   },
   "keywords": [
     "bun",
@@ -43,5 +50,10 @@
   "dependencies": {},
   "devDependencies": {
     "@types/bun": "^1.4.0"
-  }
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ayuxy027/flamingo.git"
+  },
+  "homepage": "https://github.com/ayuxy027/flamingo#readme"
 }

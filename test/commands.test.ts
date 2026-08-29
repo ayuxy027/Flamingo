@@ -26,7 +26,6 @@ describe("scroll — mapping a page taller than the viewport", () => {
     expect(map.elementCount).toBeGreaterThan(viewport);
     expect(map.reachedBottom).toBe(true);
     const refs = map.elements.map((x) => x.ref);
-    // controls from every section, including ones far below the fold
     expect(refs).toContain("button#cta");
     expect(refs).toContain("input#email");
     expect(refs).toContain("button#danger");
@@ -48,7 +47,6 @@ describe("scroll — mapping a page taller than the viewport", () => {
     expect(texts).toContain("Pricing");
     const ys = outline.map((o: any) => o.documentY);
     expect([...ys].sort((a, b) => a - b)).toEqual(ys);
-    // the fixed <nav> would otherwise be re-recorded at every scroll step
     expect(outline.filter((o: any) => o.ref === "header#topnav").length).toBeLessThanOrEqual(1);
   }, 90_000);
 
@@ -66,7 +64,6 @@ describe("interact — exercising a whole page", () => {
     const zip = r.rejectedInput.find((x: any) => x.ref === "input#zip");
     expect(zip).toBeDefined();
     expect(zip!.value).toBe("");
-    // the neighbouring field works, so this is a real difference, not a broken harness
     expect(r.results.find((x: any) => x.ref === "input#email")!.status).toBe("alive");
   }, 180_000);
 
@@ -77,7 +74,6 @@ describe("interact — exercising a whole page", () => {
     expect(dead).toContain("button#deadcta");
     expect(dead).toContain("button#lazybtn");
     expect(dead).not.toContain("button#cta");
-    // #busy is wired but async; testing it twice would wrongly mark it dead
     expect(dead).not.toContain("button#busy");
   }, 180_000);
 
@@ -109,7 +105,6 @@ describe("stress — hostile interaction patterns", () => {
     expect(rapid.errorsTriggered).toBeGreaterThan(0);
     expect(rapid.errors.join(" ")).toContain("re-entrant submit");
 
-    // a plain click on the same control is perfectly healthy
     const single = await e.detectDeadClicks({ x: 1, y: 1, timeoutMs: 50 });
     expect(single).toBeDefined();
   }, 300_000);
@@ -125,8 +120,6 @@ describe("stress — hostile interaction patterns", () => {
   test("the page's own boot errors are not reported as findings", async () => {
     using e = await Engine.open({ width: 1280, height: 800, url });
     const r = await e.stressTest({ maxTargets: 2 });
-    // the fixture logs "app boot: metrics endpoint unreachable" on every load,
-    // so a reload scenario would otherwise "discover" it every time
     const all = r.scenarios.flatMap((s: any) => s.errors ?? []);
     expect(all.some((t: string) => t.includes("app boot"))).toBe(false);
   }, 300_000);

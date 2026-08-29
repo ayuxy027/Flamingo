@@ -1,0 +1,155 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>flamingo — AI Native Frontend Testing Toolkit</title>
+<meta name="description" content="A browser your agent drives in a loop. One file, zero dependencies, built on Bun.">
+<style>
+  :root {
+    --bg:#0f0e13; --panel:#17161d; --line:#272531;
+    --ink:#f4f2f7; --muted:#9a94a8; --pink:#ff4d8d; --green:#3ddc97; --amber:#ffb454;
+  }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--ink);
+         font:16px/1.6 system-ui,-apple-system,Segoe UI,sans-serif; }
+  .wrap { max-width:860px; margin:0 auto; padding:0 24px; }
+  code, pre { font-family:ui-monospace,SFMono-Regular,Menlo,monospace; }
+  pre { background:var(--panel); border:1px solid var(--line); border-radius:12px;
+        padding:18px 20px; overflow-x:auto; font-size:13.5px; line-height:1.65; }
+  a { color:var(--pink); }
+  h1 { font-size:clamp(34px,6vw,52px); line-height:1.1; margin:0 0 8px; letter-spacing:-.02em; }
+  h2 { font-size:24px; margin:56px 0 14px; letter-spacing:-.01em; }
+  p { color:var(--muted); max-width:64ch; }
+  header { padding:72px 0 8px; }
+  .tag { color:var(--pink); font-weight:600; letter-spacing:.02em; }
+  .lede { font-size:19px; color:var(--ink); max-width:56ch; }
+  .pills { display:flex; gap:8px; flex-wrap:wrap; margin:26px 0 8px; padding:0; list-style:none; }
+  .pills li { border:1px solid var(--line); border-radius:999px; padding:6px 14px;
+              font-size:13px; color:var(--muted); }
+  .grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(220px,1fr)); gap:14px; margin:20px 0; }
+  .card { background:var(--panel); border:1px solid var(--line); border-radius:12px; padding:18px 20px; }
+  .card h3 { margin:0 0 6px; font-size:15px; }
+  .card p { margin:0; font-size:14px; }
+  table { width:100%; border-collapse:collapse; margin:18px 0; font-size:14.5px; }
+  th, td { text-align:left; padding:10px 12px; border-bottom:1px solid var(--line); }
+  th { color:var(--muted); font-weight:600; font-size:13px; }
+  td.num { text-align:right; font-family:ui-monospace,Menlo,monospace; }
+  .win { color:var(--green); font-weight:600; }
+  footer { margin:80px 0 60px; padding-top:24px; border-top:1px solid var(--line);
+           color:var(--muted); font-size:14px; }
+  .k { color:var(--pink); } .g { color:var(--green); } .a { color:var(--amber); } .d { color:var(--muted); }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header>
+  <div class="tag">🦩 flamingo</div>
+  <h1>AI Native Frontend&nbsp;Testing Toolkit</h1>
+  <p class="lede">A browser your agent drives in a loop. One source file,
+     zero dependencies, built on Bun.</p>
+  <ul class="pills">
+    <li>0 runtime dependencies</li>
+    <li>1 source file</li>
+    <li>116 tests</li>
+    <li>24 MCP tools</li>
+    <li>reproducible build</li>
+  </ul>
+</header>
+
+<h2>The problem</h2>
+<p>An agent looking at your frontend is effectively blind. Playwright hands it a
+   DOM dump it burns thousands of tokens failing to parse, then leaves it guessing
+   whether its last click did anything at all.</p>
+
+<h2>The loop</h2>
+<p>Observe, act, observe. Every action returns the resulting page state, and every
+   observation reports what changed since the last one — so the agent knows when it
+   is making progress and when to try something else.</p>
+<pre><span class="d">observe   →</span> 1 actionable control, 6 blocked behind div#cookiewall
+<span class="d">click     →</span> <span class="g">changed: true</span>, 7 controls now reachable
+<span class="d">click     →</span> <span class="g">changed: true</span>, "Task complete" appeared
+<span class="d">click     →</span> <span class="a">changed: false</span>   <span class="d">← that action did nothing; try something else</span></pre>
+
+<h2>What an observation looks like</h2>
+<p>Compact by default, because an agent re-reads this every single turn.</p>
+<pre>http://localhost:3000 | "Demo" | 1280x800 | scroll 0/2148
+elements 6
+  (44,25)   a#navfeat      <span class="k">"Features"</span>  pinned
+  (94,171)  button#cta     <span class="k">"Get Started"</span>
+  (238,171) button#deadcta <span class="k">"Learn More"</span>
+<span class="a">blocked 2 behind div#cookiewall</span>
+<span class="k">error app boot: metrics endpoint unreachable</span>
+changed true</pre>
+
+<h2>Numbers</h2>
+<table>
+  <tr><th>Measurement</th><th class="num">Before</th><th class="num">Now</th></tr>
+  <tr><td>Observation payload, per loop step</td><td class="num">360 tok</td><td class="num win">91 tok</td></tr>
+  <tr><td>30-step agent loop, observations only</td><td class="num">10,900 tok</td><td class="num win">2,900 tok</td></tr>
+  <tr><td>Dead-click detection, live control</td><td class="num">1005 ms</td><td class="num win">4 ms</td></tr>
+  <tr><td>Clicking every control on a page (40)</td><td class="num">28.5 s</td><td class="num win">6.0 s</td></tr>
+  <tr><td>Element tree, 3000-element page</td><td class="num">—</td><td class="num win">115 ms</td></tr>
+</table>
+
+<h2>What it finds</h2>
+<div class="grid">
+  <div class="card"><h3>Dead controls</h3><p>Buttons wired to nothing, and buttons
+    swallowed by an overlay — reported separately, because they are different bugs.</p></div>
+  <div class="card"><h3>Fields that lie</h3><p>Inputs that take focus but silently
+    discard what you type. Only found by actually typing.</p></div>
+  <div class="card"><h3>Race conditions</h3><p>Rapid clicks, reload mid-request,
+    navigate away mid-action. Finds unhandled rejections a single click never will.</p></div>
+  <div class="card"><h3>Layout breaks</h3><p>Horizontal overflow across viewports,
+    with the offending elements named.</p></div>
+  <div class="card"><h3>Broken assets</h3><p>Images and stylesheets that failed,
+    with HTTP status codes on the chrome backend.</p></div>
+  <div class="card"><h3>What blocks the page</h3><p>A cookie wall or modal shows up
+    as one element blocking many controls — so the agent dismisses it first.</p></div>
+</div>
+
+<h2>Install</h2>
+<pre>npx flamingo init</pre>
+<p>Writes an MCP server entry and an agent skill into your project, merging rather
+   than overwriting. Then ask your agent to check your app.</p>
+<pre>$ flamingo crawl http://localhost:3000
+
+  14 controls found, 14 tested
+  <span class="g">✓</span> 12 responded
+  <span class="k">✗</span> 2 dead
+
+    <span class="k">✗</span> button#checkout <span class="k">"Checkout"</span>  blocked by div.modal-backdrop
+    <span class="k">✗</span> a.help          <span class="k">"Help"</span>      no handler fired</pre>
+
+<h2>Zero dependency</h2>
+<p>Built for Zero Dependency 2026, Track A. The whole project is one TypeScript
+   file using nothing but the Bun standard library — the only imports are
+   <code>node:fs</code> and <code>node:path</code>. Seventeen packages it would
+   otherwise have needed are documented, along with what replaced each.</p>
+<pre>$ bun run proof
+
+  <span class="g">✓</span> dependencies: empty
+  <span class="g">✓</span> peerDependencies: empty
+  <span class="g">✓</span> node:fs — standard library
+  <span class="g">✓</span> node:path — standard library
+
+<span class="g">ZERO THIRD-PARTY RUNTIME DEPENDENCIES — verified</span></pre>
+
+<h2>Try it</h2>
+<p>There is a <a href="./demo.html">deliberately broken demo app</a> next to this
+   page. Every fault in it is planted; point flamingo at it and watch them come out.</p>
+<pre>flamingo crawl  http://localhost:8080/demo.html
+flamingo stress http://localhost:8080/demo.html --targets 6</pre>
+
+<footer>
+  MIT licensed · <a href="../README.md">README</a> ·
+  <a href="../docs/api.md">API</a> ·
+  <a href="../docs/mcp-tools.md">MCP tools</a> ·
+  <a href="../docs/internals.md">Internals</a> ·
+  <a href="../STDLIB.md">STDLIB</a>
+</footer>
+
+</div>
+</body>
+</html>

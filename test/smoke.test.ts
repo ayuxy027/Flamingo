@@ -11,7 +11,6 @@ beforeAll(() => {
 });
 afterAll(() => server.stop(true));
 
-// Every API that does not need CDP must behave identically on both backends.
 for (const backend of ["webkit", "chrome"] as const) {
   describe(backend, () => {
     let e: Engine;
@@ -42,7 +41,6 @@ for (const backend of ["webkit", "chrome"] as const) {
       expect(refs).toContain("button#live");
       expect(refs).not.toContain("button#under");
       expect(occluded).toBeGreaterThan(0);
-      // the point of the API: a compact payload, not a DOM dump
       expect(interactiveElements.length).toBeLessThan(10);
     });
 
@@ -97,9 +95,7 @@ for (const backend of ["webkit", "chrome"] as const) {
       const shot = await e.captureViewport({ path: `.flamingo/test-${backend}.png` });
       expect(shot.sizeInBytes).toBeGreaterThan(0);
       expect(await Bun.file(shot.path).exists()).toBe(true);
-      // chrome sizes the outer window, webkit the viewport; open() normalizes both
       expect(shot.cssSize).toEqual({ width: 800, height: 600 });
-      // the trap this field exists to prevent: image pixels != click coordinates
       expect(shot.pixelSize.width).toBe(shot.cssSize.width * shot.deviceScaleFactor);
       expect(shot.pixelSize.height).toBe(shot.cssSize.height * shot.deviceScaleFactor);
       expect(shot).not.toHaveProperty("base64");
@@ -121,7 +117,6 @@ for (const backend of ["webkit", "chrome"] as const) {
       const img = brokenAssets.find((a: any) => a.source.endsWith("/missing.png"));
       expect(img).toBeDefined();
       expect(statusCodesAvailable).toBe(backend === "chrome");
-      // status codes live in the network layer, so only chrome can report them
       if (backend === "chrome") expect((img as any).status).toBe(404);
       else expect(img).not.toHaveProperty("status");
     });
@@ -166,9 +161,7 @@ describe("crawl", () => {
     using e = await Engine.open({ backend: "webkit", width: 800, height: 600, url });
     const r = await e.crawl({ dwellMs: 300 });
 
-    // button#live mutates the DOM; input#field takes focus. Both are alive.
     expect(r.alive).toBeGreaterThanOrEqual(2);
-    // button#dud has no handler and only takes focus, which does not count.
     const refs = r.dead.map((d: any) => d.ref);
     expect(refs).toContain("button#dud");
     expect(refs).not.toContain("button#live");
@@ -177,7 +170,6 @@ describe("crawl", () => {
 
   test("a click swallowed by an overlay is reported as blocked, not merely dead", async () => {
     using e = await Engine.open({ backend: "webkit", width: 800, height: 600, url });
-    // #under sits beneath the backdrop, so the tree omits it; drive the coordinate directly.
     const clicked = await e.detectDeadClicks({ x: 60, y: 120, timeoutMs: 300 });
     expect(clicked.isDeadClick).toBe(true);
     const why = await e.detectPointerBlocker({ x: 60, y: 120 });

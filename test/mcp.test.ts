@@ -10,7 +10,6 @@ beforeAll(() => {
 });
 afterAll(() => server.stop(true));
 
-/** Drive the server the way a real MCP client does: JSON-RPC lines in, lines out. */
 async function rpc(requests: unknown[]): Promise<any[]> {
   const proc = Bun.spawn(["bun", "run", "flamingo.ts", "serve"], {
     stdin: "pipe",
@@ -38,7 +37,6 @@ test("initialize and tools/list return valid JSON-RPC", async () => {
   const names = list.result.tools.map((t: any) => t.name);
   expect(names).toContain("getInteractiveTree");
   expect(names).toContain("compileHealthReport");
-  // every tool must carry a description and a schema, or the agent flies blind
   for (const t of list.result.tools) {
     expect(t.description.length).toBeGreaterThan(20);
     expect(t.inputSchema.type).toBe("object");
@@ -52,7 +50,6 @@ test("tools/call drives a real browser end to end", async () => {
     { jsonrpc: "2.0", id: 3, method: "tools/call", params: { name: "getInteractiveTree", arguments: {} } },
   ]);
 
-  // an acting tool returns its own JSON on the first line, then the observation
   const [gotoLine, , ...observation] = (gotoRes.result.content[0].text as string).split("\n");
   expect(JSON.parse(gotoLine!).title).toBe("flamingo fixture");
   expect(observation.join("\n")).toContain("elements");
@@ -95,7 +92,6 @@ test("initialize carries operating instructions for clients that read them", asy
   const [init] = await rpc([{ jsonrpc: "2.0", id: 1, method: "initialize", params: {} }]);
   const text = init.result.instructions as string;
   expect(text.length).toBeGreaterThan(300);
-  // the parts an agent gets wrong without being told
   expect(text).toContain("changed: false");
   expect(text).toContain("blockedBy");
   expect(text).toContain("nativePicker");
@@ -113,11 +109,10 @@ test("observe returns compact text by default and JSON on request", async () => 
   const compactText = compact.result.content[0].text as string;
   expect(compactText).toContain("elements");
   expect(compactText).toContain("button#live");
-  expect(() => JSON.parse(compactText)).toThrow(); // it is text, not JSON
+  expect(() => JSON.parse(compactText)).toThrow();
 
   const jsonText = structured.result.content[0].text as string;
   const parsed = JSON.parse(jsonText);
   expect(parsed.elements.length).toBeGreaterThan(0);
-  // the whole point: the default costs far fewer tokens
   expect(compactText.length).toBeLessThan(jsonText.length * 0.6);
 }, 60_000);

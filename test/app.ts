@@ -1,6 +1,3 @@
-// A deliberately flawed multi-section app, tall enough to need scrolling.
-// Each flaw exists to be found by a specific command, so the tests assert
-// discovery rather than absence.
 export const APP_HTML = `<!doctype html>
 <html><head><title>flamingo demo app</title></head>
 <body style="margin:0;font:14px system-ui">
@@ -36,12 +33,9 @@ export const APP_HTML = `<!doctype html>
   wire("cta", () => document.body.appendChild(document.createElement("span")));
   wire("feat1", () => document.body.appendChild(document.createElement("span")));
   wire("buy", () => document.body.appendChild(document.createElement("span")));
-  // #deadcta and #hidden are deliberately unwired.
 
-  // #zip silently discards everything typed into it — a bug only found by typing.
   document.getElementById("zip").addEventListener("input", (e) => { e.target.value = ""; });
 
-  // Re-entrancy bug: a second click while busy throws. Only rapid clicking finds it.
   let busy = false;
   wire("busy", async () => {
     if (busy) throw new Error("re-entrant submit while a request is in flight");
@@ -51,7 +45,6 @@ export const APP_HTML = `<!doctype html>
     busy = false;
   });
 
-  // Lazy loading: the page grows the first time you scroll near the bottom.
   let grown = false;
   addEventListener("scroll", () => {
     if (grown || scrollY < 1200) return;

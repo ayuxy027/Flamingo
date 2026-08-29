@@ -103,7 +103,6 @@ describe("exit codes reflect findings", () => {
 describe("--json output contract", () => {
   test("stdout is exactly one JSON document, diagnostics go to stderr", async () => {
     const r = await cli("audit", `${base}/`, "--json");
-    // must parse whole — no progress lines, no ANSI, nothing else on stdout
     const parsed = JSON.parse(r.stdout);
     expect(parsed.targetUrl).toContain(base);
     expect(r.stdout.trimEnd().split("\n")).toHaveLength(1);
@@ -185,7 +184,6 @@ describe("self-describing surface (what an agent needs after install)", () => {
       expect(Array.isArray(c.examples)).toBe(true);
       expect(c.examples.length).toBeGreaterThan(0);
     }
-    // the chrome-only surface must be discoverable, not learned by hitting an error
     expect(d.backends.chromeOnly.join(" ")).toContain("interceptTraffic");
   }, 30_000);
 
@@ -210,7 +208,9 @@ describe("self-describing surface (what an agent needs after install)", () => {
     const file = Bun.file(binPath);
     expect(await file.exists()).toBe(true);
     expect((await file.text()).startsWith("#!/usr/bin/env bun")).toBe(true);
-    // everything the manifest promises to publish must actually be there
-    for (const f of pkg.files) expect(await Bun.file(f).exists()).toBe(true);
+    const { existsSync } = await import("node:fs");
+    for (const f of pkg.files) {
+      expect({ entry: f, present: existsSync(f) }).toEqual({ entry: f, present: true });
+    }
   });
 });

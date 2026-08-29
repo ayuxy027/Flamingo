@@ -110,6 +110,29 @@ to call everything without reading these docs:
 flamingo schema | jq '.tools[].name'
 ```
 
+## Layout
+
+```
+flamingo.ts          the entire project: library, CLI and MCP server
+README.md            this file
+STDLIB.md            the 17 packages replaced, and how
+docs/                api.md · cli.md · mcp-tools.md · internals.md · PRD.md
+skills/              the agent skill, as written by `flamingo init`
+mcp/                 ready-to-use server config and the full tool schema
+website/             landing page and a deliberately broken demo app
+test/                116 tests against a real browser
+scripts/             dependency proof · reproducible build · docs · website
+```
+
+`docs/api.md`, `docs/cli.md`, `docs/mcp-tools.md`, `skills/` and `mcp/` are
+**generated** from `flamingo.ts` by `bun run docs`, and a test fails if the
+checked-in copies drift. They exist so the surface can be read on GitHub without
+running anything.
+
+```bash
+bun run website     # serve website/ locally, then point flamingo at the demo
+```
+
 ## Build and run
 
 One command, and **no install step** — there are no dependencies to install:
@@ -163,7 +186,7 @@ Compiles twice to the same output path and compares digests:
 
 ```
 REPRODUCIBLE — both builds are byte-identical
-  sha256  1cf28105f135fb5ec36494995b8579e4772dfc31248b3bb9b473b3fad75c002f
+  sha256  5b7c569602b97ae6f3ce028f510c6399a12f706e7fa21da859378ad69d43b29e
 ```
 
 *(Hash is for the current committed source. Bun embeds the output filename in the executable, so the comparison must fix
@@ -518,7 +541,7 @@ an explicit `--out` accumulate under `.flamingo/`, which `init` adds to your
 ## Tests
 
 ```bash
-bun test          # 116 tests against a real browser and a real fixture server
+bun test          # 122 tests against a real browser and a real fixture server
 bun run typecheck
 ```
 

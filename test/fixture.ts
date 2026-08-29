@@ -1,5 +1,3 @@
-// A deliberately broken page: 404 image, load-time console error, a button
-// hidden under a backdrop, a dead div, and content that overflows narrow viewports.
 export const HTML = `<!doctype html>
 <html><head><title>flamingo fixture</title></head>
 <body style="margin:0;font:14px sans-serif">
@@ -19,7 +17,6 @@ export const HTML = `<!doctype html>
 </script>
 </body></html>`;
 
-/** A page with nothing wrong with it, for asserting the success exit code. */
 export const CLEAN_HTML = `<!doctype html>
 <html><head><title>clean</title></head>
 <body style="margin:0">

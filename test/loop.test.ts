@@ -41,7 +41,6 @@ describe("observe — one step of the agent loop", () => {
     await e.clickCoordinate({ x: accept.center.x, y: accept.center.y });
     expect((await e.observe()).changed).toBe(true);
 
-    // nothing done between these two looks
     await e.observe();
     expect((await e.observe()).changed).toBe(false);
   }, 60_000);
@@ -56,8 +55,6 @@ describe("observe — one step of the agent loop", () => {
     const start = before.elements.find((x) => x.ref === "button#start")!;
     await e.clickCoordinate({ x: start.center.x, y: start.center.y });
 
-    // clicking Start only writes text into a <div> — no control appears or moves,
-    // so without a content fingerprint this would wrongly read as a no-op
     expect((await e.observe()).changed).toBe(true);
   }, 60_000);
 
@@ -73,7 +70,6 @@ describe("observe — one step of the agent loop", () => {
 
     const withError = await e.observe();
     expect(withError.newErrors.join(" ")).toContain("handler exploded");
-    // the same error must not be reported again on the next look
     expect((await e.observe()).newErrors).toHaveLength(0);
   }, 60_000);
 });
@@ -97,7 +93,6 @@ describe("init — wiring a project up", () => {
       const text = readFileSync(skill, "utf8");
       expect(text.startsWith("---\nname: flamingo\n")).toBe(true);
       expect(text).toContain("description:");
-      // the skill must teach the loop, not just list tools
       expect(text).toContain("changed: false");
 
       const second = await run(dir);
@@ -152,13 +147,11 @@ describe("token cost of the loop", () => {
     const { renderObservation } = await import("../flamingo.ts");
     const text = renderObservation(o);
 
-    // everything the next decision needs
     expect(text).toContain("button#accept");
     expect(text).toContain(`(${o.elements[0]!.center.x},${o.elements[0]!.center.y})`);
     expect(text).toContain("blocked 2 behind div#wall");
     expect(text).toContain("changed true");
 
-    // an agent re-reads this every turn, so the multiplier matters
     const json = JSON.stringify(o);
     expect(text.length).toBeLessThan(json.length * 0.6);
   }, 60_000);
@@ -174,8 +167,6 @@ describe("token cost of the loop", () => {
   test("the title comes from the document, not the racy view.title", async () => {
     using e = await Engine.open({ width: 800, height: 400, url });
     const o = await e.observe();
-    // WebView.title is populated asynchronously by the host and is empty on
-    // pages that take a moment; document.title is authoritative and free.
     expect(o.title).toBe(await e.view.evaluate<string>("document.title"));
   }, 60_000);
 
@@ -207,7 +198,6 @@ describe("init keeps generated output out of the repo", () => {
       expect(after).toContain(".flamingo/");
 
       await run();
-      // a second run must not append it again
       expect(readFileSync(join(dir, ".gitignore"), "utf8").match(/\.flamingo\//g)).toHaveLength(1);
     } finally {
       rmSync(dir, { recursive: true, force: true });

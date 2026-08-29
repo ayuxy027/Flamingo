@@ -1,11 +1,4 @@
 #!/usr/bin/env bun
-/**
- * Dependency proof — mechanically verifies the zero-dependency claim instead of
- * asserting it in prose. Exits non-zero if anything below fails, so CI catches a
- * dependency sneaking in.
- *
- *   bun run scripts/dependency-proof.ts
- */
 
 import { readFileSync, existsSync } from "node:fs";
 import { builtinModules } from "node:module";
@@ -26,8 +19,6 @@ for (const field of ["dependencies", "peerDependencies", "optionalDependencies",
   count === 0 ? pass(`${field}: empty`) : fail(`${field} has ${count} entr${count === 1 ? "y" : "ies"}: ${JSON.stringify(value)}`);
 }
 
-// Dev-only dependencies are permitted but must be disclosed. Types are erased at
-// compile time and never reach the running program.
 const dev = Object.keys(pkg.devDependencies ?? {});
 console.log("\n\x1b[1mDev-only dependencies (permitted, disclosed in STDLIB.md)\x1b[0m");
 if (dev.length === 0) pass("none");
@@ -37,10 +28,7 @@ for (const d of dev) {
     : fail(`${d} — not obviously type-only; justify it in STDLIB.md`);
 }
 
-// Every import in the shipped source must resolve to a Node/Bun builtin.
 const BUILTINS = new Set([...builtinModules, "bun", "bun:test", "bun:sqlite", "bun:ffi", "bun:jsc"]);
-// Strip comments first, or an import shown in a doc comment reads as a real one.
-// The `(?<!:)` guard keeps `http://` inside strings from eating the rest of a line.
 const source = readFileSync(pkg.module, "utf8")
   .replace(/\/\*[\s\S]*?\*\//g, "")
   .replace(/(?<!:)\/\/[^\n]*/g, "");
@@ -58,7 +46,6 @@ for (const spec of [...specifiers].sort()) {
   else fail(`${spec} — third-party package`);
 }
 
-// The published artifact must not include a lockfile-driven install step.
 console.log("\n\x1b[1mShipped files\x1b[0m");
 const files: string[] = pkg.files ?? [];
 files.length ? pass(`files: ${files.join(", ")}`) : fail("no files field — the whole directory would be published");

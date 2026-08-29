@@ -1,0 +1,137 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>flamingo demo — a deliberately broken app</title>
+<style>
+  :root { --ink:#16151a; --muted:#6b6875; --line:#e6e3ea; --pink:#ff4d8d; }
+  * { box-sizing: border-box; }
+  body { margin:0; font:15px/1.55 system-ui,-apple-system,Segoe UI,sans-serif; color:var(--ink); }
+  header { position:fixed; inset:0 0 auto 0; height:56px; background:#16151a; color:#fff;
+           display:flex; align-items:center; gap:20px; padding:0 24px; z-index:20; }
+  header a { color:#fff; text-decoration:none; opacity:.75; }
+  main { padding-top:56px; max-width:820px; margin:0 auto; }
+  section { padding:40px 24px; border-bottom:1px solid var(--line); min-height:420px; }
+  h1 { font-size:34px; margin:.2em 0; } h2 { font-size:22px; margin:.2em 0 1em; }
+  p { color:var(--muted); max-width:60ch; }
+  button, .btn { font:inherit; padding:10px 18px; border-radius:8px; border:1px solid var(--line);
+                 background:#fff; cursor:pointer; }
+  button.primary { background:var(--pink); border-color:var(--pink); color:#fff; }
+  input, select { font:inherit; padding:9px 12px; border:1px solid var(--line); border-radius:8px; width:280px; }
+  .row { display:flex; gap:12px; align-items:center; flex-wrap:wrap; margin:18px 0; }
+  .masked { position:relative; display:inline-block; }
+  #veil { position:absolute; inset:0; background:rgba(0,0,0,.04); border-radius:8px; }
+  #wide { width:1400px; height:8px; background:var(--pink); opacity:.35; margin-top:28px; }
+  #cookie { position:fixed; inset:auto 0 0 0; background:#16151a; color:#fff; padding:18px 24px;
+            display:flex; gap:16px; align-items:center; justify-content:space-between; z-index:30; }
+  #cookie button { background:var(--pink); border-color:var(--pink); color:#fff; }
+  .out { font:13px ui-monospace,SFMono-Regular,Menlo,monospace; color:var(--pink); min-height:20px; }
+</style>
+</head>
+<body>
+<header>
+  <strong>flamingo demo</strong>
+  <a href="#features" id="navfeat">Features</a>
+  <a href="#pricing" id="navprice">Pricing</a>
+  <a href="#contact" id="navcontact">Contact</a>
+</header>
+
+<main>
+  <section id="hero">
+    <h1>A deliberately broken app</h1>
+    <p>Every fault below is planted. Point flamingo at this page and it finds them
+       without being told where to look.</p>
+    <div class="row">
+      <button id="cta" class="primary">Get Started</button>
+      <button id="deadcta">Learn More</button>
+    </div>
+    <div class="out" id="heroOut"></div>
+    <p><small>“Learn More” has no handler at all.</small></p>
+  </section>
+
+  <section id="features">
+    <h2>Features</h2>
+    <div class="row">
+      <button id="feat1">Expand</button>
+      <button id="busy" class="primary">Submit</button>
+    </div>
+    <div class="out" id="featOut"></div>
+    <p><small>“Submit” throws if clicked again while its request is still in flight.</small></p>
+  </section>
+
+  <section id="pricing">
+    <h2>Pricing</h2>
+    <div class="row">
+      <button id="buy" class="primary">Buy</button>
+      <span class="masked">
+        <button id="hidden">Upgrade</button>
+        <span id="veil"></span>
+      </span>
+    </div>
+    <p><small>“Upgrade” sits under a transparent overlay and can never be clicked.</small></p>
+    <div id="wide"></div>
+    <p><small>That pink bar is 1400px wide and overflows narrow viewports.</small></p>
+  </section>
+
+  <section id="contact">
+    <h2>Contact</h2>
+    <div class="row"><input id="email" type="email" placeholder="you@example.com"></div>
+    <div class="row"><input id="zip" type="text" placeholder="Postcode"></div>
+    <div class="row">
+      <select id="plan"><option>Basic</option><option>Pro</option></select>
+    </div>
+    <div class="row">
+      <button id="send" class="primary">Send</button>
+      <button id="danger">Delete account</button>
+    </div>
+    <div class="out" id="contactOut"></div>
+    <p><small>The postcode field silently discards everything typed into it.</small></p>
+  </section>
+</main>
+
+<div id="cookie">
+  <span>We use cookies, obviously.</span>
+  <button id="accept">Accept</button>
+</div>
+
+<img src="/assets/logo-that-does-not-exist.png" alt="" width="1" height="1">
+
+<script>
+  console.error("app boot: metrics endpoint unreachable");
+
+  const $ = (id) => document.getElementById(id);
+  const say = (el, msg) => { $(el).textContent = msg; };
+
+  $("accept").addEventListener("click", () => $("cookie").remove());
+  $("cta").addEventListener("click", () => say("heroOut", "Started."));
+  $("feat1").addEventListener("click", () => say("featOut", "Expanded."));
+  $("buy").addEventListener("click", () => say("contactOut", "Added to basket."));
+  $("send").addEventListener("click", () => say("contactOut", "Message sent."));
+
+  $("zip").addEventListener("input", (e) => { e.target.value = ""; });
+
+  let busy = false;
+  $("busy").addEventListener("click", async () => {
+    if (busy) throw new Error("re-entrant submit while a request is in flight");
+    busy = true;
+    say("featOut", "Submitting…");
+    await new Promise((r) => setTimeout(r, 500));
+    say("featOut", "Submitted.");
+    busy = false;
+  });
+
+  let grown = false;
+  addEventListener("scroll", () => {
+    if (grown || scrollY < 900) return;
+    grown = true;
+    const s = document.createElement("section");
+    s.id = "testimonials";
+    s.innerHTML = '<h2>Testimonials</h2><p>Loaded lazily once you scrolled.</p>' +
+                  '<div class="row"><button id="lazybtn">Read more</button></div>' +
+                  '<div class="out" id="lazyOut"></div>';
+    document.querySelector("main").appendChild(s);
+    $("lazybtn").addEventListener("click", () => say("lazyOut", "Expanded."));
+  });
+</script>
+</body>
+</html>

@@ -9,36 +9,36 @@ await using e = await Engine.open({ url: "http://localhost:3000" });
 const step = await e.observe();
 ```
 
-26 public methods on `Engine`.
+26 public methods on `Engine`. Full behaviour and options: [MCP tools](./mcp-tools.md), [internals](./internals.md).
 
 | Method | What it does |
 | :-- | :-- |
-| `auditResponsiveness` | Resize through viewports and report horizontal overflow at each. |
-| `captureRuntimeLogs` | Read buffered console output and page exceptions. |
-| `captureViewport` | Screenshot the viewport. |
+| `auditResponsiveness` | Resize through viewports and report horizontal overflow with the worst offending elements at each size. |
+| `captureRuntimeLogs` | Buffered console output and page exceptions. |
+| `captureViewport` | Screenshot the viewport to a file. |
 | `clickCoordinate` | Click. |
 | `close` | Close the view and release its browser process. |
-| `compileHealthReport` | Consolidated scorecard. |
-| `crawl` | Click every actionable control and report the ones that do nothing. |
-| `detectDeadClicks` | Click a coordinate and report whether anything at all happened. |
-| `detectPointerBlocker` | Explain whether a click at (x, y) reaches an interactive element, and what blocks it. |
-| `getInteractiveTree` | Compact, viewport-filtered list of everything an agent can act on. |
-| `goBack` | Go back in history. |
-| `goto` | Navigate and wait for the main frame load to finish. |
-| `hoverCoordinate` | Hover to reveal popovers and CSS dropdowns. |
-| `interact` | Walk the whole page and exercise everything on it. |
-| `interceptTraffic` | Read buffered network traffic. |
-| `observe` | A single step of the agent loop. |
-| `pressKey` | Press a named key (`"Enter"`, `"Tab"`, `"Escape"`, ...) or a chord. |
-| `reload` | Reload the current page. |
-| `scanBrokenAssets` | Broken images, stylesheets and scripts. |
-| `scroll` | Scroll by a pixel delta, or bring a selector into view. |
-| `scrollScan` | Scroll the whole page and assemble one map of it. |
-| `stressTest` | Try to break the page on purpose. |
+| `compileHealthReport` | Consolidated scorecard: console errors, broken assets, dead clicks and layout overflow, with a pass/fail total. |
+| `crawl` | Click every actionable control on the page and report which ones do nothing, and why — swallowed by an overlay, or no handler fired at all. |
+| `detectDeadClicks` | Click a coordinate and report whether anything happened: DOM mutations, console output, navigation, and network requests. |
+| `detectPointerBlocker` | Explain whether a click at (x, y) reaches an interactive element, and name the element blocking it if not. |
+| `getInteractiveTree` | Compact list of every element that can actually be acted on, with click-ready CSS-space centre coordinates. |
+| `goBack` | Go back in browser history. |
+| `goto` | Navigate to a URL and wait for the main frame to finish loading. |
+| `hoverCoordinate` | Hover to reveal popovers, dropdowns and hidden overlays. |
+| `interact` | Scroll the whole page and exercise every control: click buttons and links, type sample data into fields and verify it was accepted. |
+| `interceptTraffic` | Buffered network requests with methods and response status codes. |
+| `observe` | One step of the agent loop: current url and title, the actionable elements with click-ready coordinates, what is covering anything unreachable, plus the console errors and failed requests SINCE THE LAST observe, and a `changed` flag that is false when nothing moved. |
+| `pressKey` | Press a named key ("Enter", "Tab", "Escape", arrows) or a chord with modifiers. |
+| `reload` | Reload the current page, under a deadline. |
+| `scanBrokenAssets` | Broken images, stylesheets and failed requests. |
+| `scroll` | Scroll by a pixel delta (dx/dy) or bring a selector into view. |
+| `scrollScan` | Scroll the entire page and return one merged map: every interactive element in document-space coordinates, the heading outline, what is pinned over the content, and whether the page lazy-loads. |
+| `stressTest` | Run a fixed sequence of hostile interaction patterns — rapid clicks, double clicks, reload mid-action, navigate away mid-action, resize and scroll mid-action, interleaved clicks — and report the console errors each triggers. |
 | `typeInput` | Type into the focused element. |
-| `waitFor` | Wait until something appears. |
-| `waitForGone` | Wait until an element matching the criteria is gone (a spinner, a modal). |
-| `waitForIdle` | Wait until no network request has started for `idleMs`. |
+| `waitFor` | Wait until an element appears and is visible, by CSS selector and/or the text it contains. |
+| `waitForGone` | Wait until an element matching a selector and/or text is gone — a loading spinner, a modal, a toast. |
+| `waitForIdle` | Wait until no network request has started for a quiet window. |
 
 ## Also exported
 
