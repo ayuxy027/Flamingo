@@ -343,3 +343,65 @@ describe("session persistence", () => {
     }
   }, 90_000);
 });
+
+describe("links that look like navigation but are not", () => {
+  test("mailto, tel, javascript: and download are not treated as leaving the page", async () => {
+    const srv = Bun.serve({ port: 0, fetch: () => new Response(
+      `<!doctype html><body style="margin:0">
+       <a id="mail" href="mailto:x@y.com">mail</a> <a id="tel" href="tel:+15550100">call</a>
+       <a id="js" href="javascript:void(0)">js</a> <a id="dl" href="/f.zip" download>dl</a>
+       <a id="real" href="/elsewhere">real</a></body>`, { headers: { "content-type": "text/html" } }) });
+    try {
+      using e = await Engine.open({ width: 800, height: 400, url: `http://127.0.0.1:${srv.port}/` });
+      const by = new Map((await e.getInteractiveTree()).interactiveElements.map((x) => [x.ref, x]));
+      // marking these "leaves the page" would let crawl call them alive untested
+      for (const ref of ["a#mail", "a#tel", "a#js", "a#dl"]) {
+        expect(by.get(ref)?.leavesPage ?? false).toBe(false);
+      }
+      expect(by.get("a#real")!.leavesPage).toBe(true);
+    } finally {
+      srv.stop(true);
+    }
+  }, 60_000);
+});
+
+describe("noise the agent should not pay for", () => {
+  test("body and html are never named as blockers", async () => {
+    const srv = Bun.serve({ port: 0, fetch: () => new Response(
+      `<!doctype html><body style="margin:0">
+       <div style="width:40px;height:16px;overflow:hidden">
+         <button id="clipped" style="width:100px;height:36px">clipped</button>
+       </div></body>`, { headers: { "content-type": "text/html" } }) });
+    try {
+      using e = await Engine.open({ width: 800, height: 400, url: `http://127.0.0.1:${srv.port}/` });
+      const tree = await e.getInteractiveTree();
+      // landing on body means nothing covers it — that is not a blocker
+      expect(tree.blockedBy.map((b) => b.ref)).not.toContain("body");
+      expect(tree.blockedBy.map((b) => b.ref)).not.toContain("html");
+    } finally {
+      srv.stop(true);
+    }
+  }, 60_000);
+});
+
+describe("navigations that race each other", () => {
+  test("a page that redirects itself does not break the next goto", async () => {
+    const srv = Bun.serve({ port: 0, fetch(req) {
+      const p = new URL(req.url).pathname;
+      if (p === "/done") return new Response(`<!doctype html><body><button id="after" style="width:90px;height:30px">after</button></body>`, { headers: { "content-type": "text/html" } });
+      if (p === "/next") return new Response(`<!doctype html><body><button id="next" style="width:90px;height:30px">next</button></body>`, { headers: { "content-type": "text/html" } });
+      return new Response(`<!doctype html><head><meta http-equiv="refresh" content="0;url=/done"></head><body><button id="before" style="width:90px;height:30px">before</button></body>`, { headers: { "content-type": "text/html" } });
+    }});
+    try {
+      using e = await Engine.open({ width: 800, height: 400 });
+      await e.goto(`http://127.0.0.1:${srv.port}/`);
+      // the meta refresh fires while we are leaving, cancelling our navigation;
+      // that is a race we lost, not an error to surface as NSURLErrorDomain -999
+      const next = await e.goto(`http://127.0.0.1:${srv.port}/next`);
+      expect(next.url).toContain("/next");
+      expect((await e.getInteractiveTree()).interactiveElements.map((x) => x.ref)).toContain("button#next");
+    } finally {
+      srv.stop(true);
+    }
+  }, 60_000);
+});

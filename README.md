@@ -163,7 +163,7 @@ Compiles twice to the same output path and compares digests:
 
 ```
 REPRODUCIBLE — both builds are byte-identical
-  sha256  67eb7128c1ffe5be7b88a699f60c96dc22207e61985cc20ac03d6f4ccf051b48
+  sha256  1cf28105f135fb5ec36494995b8579e4772dfc31248b3bb9b473b3fad75c002f
 ```
 
 *(Hash is for the current committed source. Bun embeds the output filename in the executable, so the comparison must fix
@@ -518,7 +518,7 @@ an explicit `--out` accumulate under `.flamingo/`, which `init` adds to your
 ## Tests
 
 ```bash
-bun test          # 113 tests against a real browser and a real fixture server
+bun test          # 116 tests against a real browser and a real fixture server
 bun run typecheck
 ```
 

@@ -116,7 +116,9 @@ const interactiveTree = (max: number) => `(() => {
       occluded++;
       // A cookie banner or modal blanketing the page shows up here as one ref
       // blocking many controls, which is the actionable form of "12 occluded".
-      const by = describe(hit);
+      // Landing on body/html means nothing is on top; naming them as the blocker
+      // is noise, and it is noise the agent pays for on every observation.
+      const by = hit.tagName === "BODY" || hit.tagName === "HTML" ? null : describe(hit);
       if (by) blockers.set(by, (blockers.get(by) || 0) + 1);
       continue;
     }
@@ -141,9 +143,12 @@ const interactiveTree = (max: number) => `(() => {
     const t = el.getAttribute("type"); if (t) item.type = t;
     if (el.tagName === "A" && el.href) {
       item.href = el.href;
-      // Same document (or a pure hash/javascript: link) means clicking it is a
-      // JS question; a different document means clicking it just leaves the page.
-      item.leavesPage = el.href.split("#")[0] !== location.href.split("#")[0] && !/^javascript:/i.test(el.getAttribute("href") || "");
+      const raw = el.getAttribute("href") || "";
+      // mailto:/tel:/sms: hand off to another app and a download attribute saves a
+      // file — none of them navigate, so treating them as "leaves the page" would
+      // let a crawl mark them alive without ever testing them.
+      const handsOff = /^(mailto|tel|sms|javascript):/i.test(raw) || el.hasAttribute("download");
+      item.leavesPage = !handsOff && el.href.split("#")[0] !== location.href.split("#")[0];
     }
     if (el.disabled) item.disabled = true;
     // Clicking a <select> opens a native popup that blocks the renderer until a
@@ -735,6 +740,17 @@ export function renderObservation(o: Observation): string {
   return lines.join("\n");
 }
 
+/**
+ * A navigation cancelled because another one superseded it — a meta refresh, a
+ * script redirect, a click that navigated. The page is fine; our request simply
+ * lost the race, so retrying once is the right answer rather than surfacing a
+ * raw Cocoa or Chromium error code.
+ */
+function isCancelledNavigation(e: unknown): boolean {
+  const msg = String((e as Error)?.message ?? e);
+  return /-999|cancell?ed|ERR_ABORTED|NS_BINDING_ABORTED/i.test(msg);
+}
+
 /** A browser host that died underneath us, as opposed to a real usage error. */
 function isTransientHostFailure(e: unknown): boolean {
   const msg = String((e as Error)?.message ?? e);
@@ -990,7 +1006,14 @@ export class Engine {
     { timeoutMs = 30_000 } = {},
   ): Promise<{ url: string; title: string; timedOut: boolean; recovered: boolean }> {
     const recovered = await this.healIfPoisoned();
-    const { timedOut } = await this.navigationOp(() => this.view.navigate(url), timeoutMs);
+    let timedOut = false;
+    try {
+      ({ timedOut } = await this.navigationOp(() => this.view.navigate(url), timeoutMs));
+    } catch (e) {
+      if (!isCancelledNavigation(e)) throw e;
+      // Something on the previous page redirected while we were leaving it.
+      ({ timedOut } = await this.navigationOp(() => this.view.navigate(url), timeoutMs));
+    }
     // A navigation replaces the JS context, taking the error hook with it. The
     // same round trip returns the title, because WebView.title is populated
     // asynchronously by the host and is simply empty on a page that took a moment.
