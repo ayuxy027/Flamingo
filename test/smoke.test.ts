@@ -20,8 +20,8 @@ for (const backend of ["webkit", "chrome"] as const) {
     });
     afterAll(() => e?.close());
 
-    test("goto loaded the page", () => {
-      expect(e.view.title).toBe("flamingo fixture");
+    test("goto loaded the page", async () => {
+      expect(await e.view.evaluate<string>("document.title")).toBe("flamingo fixture");
     });
 
     test("the requested viewport is the actual CSS viewport", async () => {
