@@ -1,5 +1,5 @@
 import { test, expect, beforeAll, afterAll, describe } from "bun:test";
-import { Engine } from "../nodep.ts";
+import { Engine } from "../flamingo.ts";
 import { serveFixture } from "./fixture.ts";
 
 let server: ReturnType<typeof serveFixture>;
@@ -25,7 +25,7 @@ for (const backend of ["webkit", "chrome"] as const) {
     afterAll(() => e?.close());
 
     test("goto loaded the page", () => {
-      expect(e.view.title).toBe("nodep fixture");
+      expect(e.view.title).toBe("flamingo fixture");
     });
 
     test("the requested viewport is the actual CSS viewport", async () => {
@@ -97,7 +97,7 @@ for (const backend of ["webkit", "chrome"] as const) {
     });
 
     test("captureViewport writes a file and reports the CSS-to-pixel scale", async () => {
-      const shot = await e.captureViewport({ path: `.nodep/test-${backend}.png` });
+      const shot = await e.captureViewport({ path: `.flamingo/test-${backend}.png` });
       expect(shot.sizeInBytes).toBeGreaterThan(0);
       expect(await Bun.file(shot.path).exists()).toBe(true);
       // chrome sizes the outer window, webkit the viewport; open() normalizes both
@@ -162,4 +162,36 @@ describe("backend capability boundary", () => {
     expect(traffic).toHaveLength(1);
     expect(traffic[0].status).toBe(404);
   });
+});
+
+describe("crawl", () => {
+  test("finds the dead control and clears the wired ones", async () => {
+    using e = await Engine.open({ backend: "webkit", width: 800, height: 600, url });
+    const r = await e.crawl({ dwellMs: 300 });
+
+    // button#live mutates the DOM; input#field takes focus. Both are alive.
+    expect(r.alive).toBeGreaterThanOrEqual(2);
+    // button#dud has no handler and only takes focus, which does not count.
+    const refs = r.dead.map((d: any) => d.ref);
+    expect(refs).toContain("button#dud");
+    expect(refs).not.toContain("button#live");
+    expect(refs).not.toContain("input#field");
+  }, 90_000);
+
+  test("a click swallowed by an overlay is reported as blocked, not merely dead", async () => {
+    using e = await Engine.open({ backend: "webkit", width: 800, height: 600, url });
+    // #under sits beneath the backdrop, so the tree omits it; drive the coordinate directly.
+    const clicked = await e.detectDeadClicks({ x: 60, y: 120, timeoutMs: 300 });
+    expect(clicked.isDeadClick).toBe(true);
+    const why = await e.detectPointerBlocker({ x: 60, y: 120 });
+    expect(why.isBlocked).toBe(true);
+    expect(why.blockingElement).toBe("div#backdrop");
+  }, 60_000);
+
+  test("clicking a text field counts as a live response", async () => {
+    using e = await Engine.open({ backend: "webkit", width: 800, height: 600, url });
+    const r = await e.detectDeadClicks({ x: 110, y: 295, timeoutMs: 300 });
+    expect(r.focusChanged).toBe(true);
+    expect(r.isDeadClick).toBe(false);
+  }, 60_000);
 });

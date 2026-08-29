@@ -11,7 +11,7 @@ beforeAll(() => {
 afterAll(() => server.stop(true));
 
 async function cli(...args: string[]) {
-  const proc = Bun.spawn(["bun", "run", "nodep.ts", ...args], { stdout: "pipe", stderr: "pipe" });
+  const proc = Bun.spawn(["bun", "run", "flamingo.ts", ...args], { stdout: "pipe", stderr: "pipe" });
   const [stdout, stderr, exitCode] = await Promise.all([
     new Response(proc.stdout).text(),
     new Response(proc.stderr).text(),
@@ -125,10 +125,24 @@ describe("--json output contract", () => {
 });
 
 test("shot writes the file it reports", async () => {
-  const out = ".nodep/cli-test.png";
+  const out = ".flamingo/cli-test.png";
   const r = await cli("shot", `${base}/clean`, "--out", out, "--json");
   expect(r.exitCode).toBe(0);
   const shot = JSON.parse(r.stdout);
   expect(await Bun.file(shot.path).exists()).toBe(true);
   expect(shot.sizeInBytes).toBeGreaterThan(0);
 }, 60_000);
+
+test("crawl exits 1 and names the dead control", async () => {
+  const r = await cli("crawl", `${base}/`, "--json", "--dwell", "300");
+  expect(r.exitCode).toBe(1);
+  const out = JSON.parse(r.stdout);
+  expect(out.dead.map((d: any) => d.ref)).toContain("button#dud");
+  expect(out.alive).toBeGreaterThan(0);
+}, 120_000);
+
+test("crawl exits 0 when every control responds", async () => {
+  const r = await cli("crawl", `${base}/clean`, "--json", "--dwell", "300");
+  expect(r.exitCode).toBe(0);
+  expect(JSON.parse(r.stdout).dead).toHaveLength(0);
+}, 90_000);

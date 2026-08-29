@@ -1,19 +1,19 @@
 {
-  "name": "nodep",
+  "name": "@ayuxy027/flamingo",
   "version": "0.1.0",
-  "description": "AI-native browser automation on Bun.WebView. Zero runtime dependencies.",
+  "description": "Unblind your agent. AI-native browser automation on Bun.WebView, with zero dependencies.",
   "type": "module",
-  "module": "nodep.ts",
-  "main": "nodep.ts",
-  "types": "nodep.ts",
+  "module": "flamingo.ts",
+  "main": "flamingo.ts",
+  "types": "flamingo.ts",
   "exports": {
-    ".": "./nodep.ts"
+    ".": "./flamingo.ts"
   },
   "bin": {
-    "nodep": "./nodep.ts"
+    "flamingo": "./flamingo.ts"
   },
   "files": [
-    "nodep.ts",
+    "flamingo.ts",
     "README.md",
     "STDLIB.md",
     "LICENSE"
@@ -22,7 +22,7 @@
     "bun": ">=1.4.0"
   },
   "scripts": {
-    "build": "bun build --compile --minify --sourcemap=none nodep.ts --outfile dist/nodep",
+    "build": "bun build --compile --minify --sourcemap=none flamingo.ts --outfile dist/flamingo",
     "test": "bun test",
     "typecheck": "tsc --noEmit",
     "proof": "bun run scripts/dependency-proof.ts",

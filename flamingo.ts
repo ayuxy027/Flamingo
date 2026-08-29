@@ -1,6 +1,6 @@
 #!/usr/bin/env bun
 /**
- * nodep — AI-native browser automation and frontend testing.
+ * flamingo — AI-native browser automation and frontend testing.
  *
  * Zero third-party runtime dependencies: the Bun standard library only. The
  * entire project — library, MCP server and CLI — is this one file.
@@ -10,9 +10,9 @@
  * agent actually needs: compact viewport-filtered element trees, click
  * diagnostics, dead-click detection, responsive auditing and a health report.
  *
- * Library:  import { Engine } from "./nodep.ts"
- * CLI:      nodep audit http://localhost:3000 --json
- * MCP:      nodep serve --backend chrome
+ * Library:  import { Engine } from "./flamingo.ts"
+ * CLI:      flamingo audit http://localhost:3000 --json
+ * MCP:      flamingo serve --backend chrome
  *
  * @license MIT
  */
@@ -163,7 +163,7 @@ const brokenAssetsProbe = `(() => {
     if (!loaded) out.push({ type: "stylesheet", source: l.href });
   }
   for (const s of document.querySelectorAll("script[src]")) {
-    if (s.dataset && s.dataset.nodepFailed) out.push({ type: "script", source: s.src });
+    if (s.dataset && s.dataset.flamingoFailed) out.push({ type: "script", source: s.src });
   }
   return out;
 })()`;
@@ -172,19 +172,29 @@ const brokenAssetsProbe = `(() => {
 // replaced, not on subtree mutations — so it misses nearly every real click. A
 // MutationObserver installed before the click is the only thing that sees them.
 const installMutationCounter = `(() => {
-  if (window.__nodepObs) window.__nodepObs.disconnect();
-  window.__nodepMut = 0;
-  const o = new MutationObserver((ms) => { window.__nodepMut += ms.length; });
+  if (window.__flamingoObs) window.__flamingoObs.disconnect();
+  window.__flamingoMut = 0;
+  const a = document.activeElement;
+  window.__flamingoFocus = a ? a.tagName + "#" + (a.id || "") : "";
+  const o = new MutationObserver((ms) => { window.__flamingoMut += ms.length; });
   o.observe(document.documentElement, { subtree: true, childList: true, attributes: true, characterData: true });
-  window.__nodepObs = o;
+  window.__flamingoObs = o;
   return true;
 })()`;
 
-/** Returns -1 when the counter is gone, i.e. navigation replaced the context. */
+/** `mutations: -1` means the counter is gone, i.e. navigation replaced the context. */
 const readMutationCounter = `(() => {
-  const n = window.__nodepMut;
-  if (window.__nodepObs) { window.__nodepObs.disconnect(); window.__nodepObs = null; }
-  return typeof n === "number" ? n : -1;
+  const n = window.__flamingoMut;
+  const before = window.__flamingoFocus;
+  if (window.__flamingoObs) { window.__flamingoObs.disconnect(); window.__flamingoObs = null; }
+  if (typeof n !== "number") return { mutations: -1, focusChanged: false };
+  const a = document.activeElement;
+  const after = a ? a.tagName + "#" + (a.id || "") : "";
+  // Only a field taking focus counts: buttons take focus on every click, so
+  // counting that would mark every unwired button as alive.
+  const focusChanged = !!a && after !== before &&
+    (/^(INPUT|TEXTAREA|SELECT)$/.test(a.tagName) || a.isContentEditable === true);
+  return { mutations: n, focusChanged };
 })()`;
 
 const viewportInfo = `({ width: innerWidth, height: innerHeight, deviceScaleFactor: devicePixelRatio, scrollX, scrollY })`;
@@ -446,7 +456,7 @@ export class Engine {
     const meta = await new Bun.Image(buf).metadata();
     const vp = await this.evaluate<{ width: number; height: number; deviceScaleFactor: number }>(viewportInfo);
 
-    const path = resolve(opts.path ?? `.nodep/viewport-${Date.now()}-${this.shotSeq++}.${format}`);
+    const path = resolve(opts.path ?? `.flamingo/viewport-${Date.now()}-${this.shotSeq++}.${format}`);
     mkdirSync(dirname(path), { recursive: true });
     await Bun.write(path, buf);
 
@@ -619,19 +629,22 @@ export class Engine {
     await this.view.click(x, y);
     await Bun.sleep(timeoutMs);
 
-    // -1 means the counter is gone, i.e. a navigation replaced the JS context.
-    let mutations = await this.evaluate<number>(readMutationCounter);
+    const probe = await this.evaluate<{ mutations: number; focusChanged: boolean }>(readMutationCounter);
+    // mutations < 0 means the counter is gone, i.e. navigation replaced the context.
+    let mutations = probe.mutations;
     const navigated = this.navCount > nav0 || mutations < 0;
     if (mutations < 0) mutations = 0;
 
     const networkRequests = this.backend === "chrome" ? this.networkBuf.length - net0 : null;
     const consoleLogs = this.consoleBuf.length - log0;
-    const isDeadClick = !navigated && mutations === 0 && consoleLogs === 0 && (networkRequests ?? 0) === 0;
+    const isDeadClick =
+      !navigated && !probe.focusChanged && mutations === 0 && consoleLogs === 0 && (networkRequests ?? 0) === 0;
 
     return {
       isDeadClick,
       coordinates: { x, y },
       navigated,
+      focusChanged: probe.focusChanged,
       registeredDOMChanges: mutations,
       registeredNetworkRequests: networkRequests,
       registeredConsoleLogs: consoleLogs,
@@ -705,6 +718,60 @@ export class Engine {
       },
       backend: this.backend,
       statusCodesAvailable: assets.statusCodesAvailable,
+    };
+  }
+
+  /**
+   * Click every actionable control and report the ones that do nothing.
+   *
+   * Composes three of the APIs above: the tree supplies the targets,
+   * detectDeadClicks decides whether anything happened, and when nothing did,
+   * detectPointerBlocker explains why — an overlay swallowing the click reads
+   * very differently from a button with no handler.
+   *
+   * The page reloads only after a click that *changed* something. A dead click
+   * by definition leaves the layout alone, so the coordinates captured up front
+   * stay valid and cost nothing to reuse.
+   */
+  async crawl({ max = 20, dwellMs = 700 }: { max?: number; dwellMs?: number } = {}) {
+    const targetUrl = this.view.url;
+    const tree = await this.getInteractiveTree({ max });
+    const candidates = tree.interactiveElements.filter((el: any) => !el.disabled);
+    const skipped = tree.interactiveElements.length - candidates.length;
+
+    const dead: Array<Record<string, unknown>> = [];
+    let alive = 0;
+
+    for (const el of candidates) {
+      const clicked = await this.detectDeadClicks({ x: el.center.x, y: el.center.y, timeoutMs: dwellMs });
+      if (!clicked.isDeadClick) {
+        alive++;
+        // Whatever it changed invalidates the coordinates we captured; reset.
+        await this.goto(targetUrl);
+        continue;
+      }
+      const blocker = await this.detectPointerBlocker({ x: el.center.x, y: el.center.y });
+      dead.push({
+        ref: el.ref,
+        text: el.text,
+        center: el.center,
+        reason: blocker.isBlocked ? "blocked" : "no-handler",
+        blockedBy: blocker.isBlocked ? blocker.blockingElement : null,
+        registeredDOMChanges: clicked.registeredDOMChanges,
+        registeredNetworkRequests: clicked.registeredNetworkRequests,
+        registeredConsoleLogs: clicked.registeredConsoleLogs,
+      });
+    }
+
+    return {
+      targetUrl,
+      controlsFound: tree.interactiveElements.length,
+      controlsTested: candidates.length,
+      skipped,
+      alive,
+      dead,
+      occluded: tree.occluded,
+      truncated: tree.truncated,
     };
   }
 
@@ -807,6 +874,12 @@ const TOOLS: Record<string, Tool> = {
     inputSchema: { type: "object", properties: { x: numSchema, y: numSchema, timeoutMs: numSchema }, required: ["x", "y"] },
     run: (e, a) => e.detectDeadClicks(a),
   },
+  crawl: {
+    description:
+      "Click every actionable control on the page and report which ones do nothing, and why — swallowed by an overlay, or no handler fired at all. The fastest way to find broken buttons across a page.",
+    inputSchema: { type: "object", properties: { max: numSchema, dwellMs: numSchema } },
+    run: (e, a) => e.crawl(a),
+  },
   captureRuntimeLogs: {
     description:
       "Buffered console output and page exceptions. Capture starts before the first navigation, so load-time errors are included.",
@@ -875,7 +948,7 @@ async function handle(msg: any, getEngine: () => Promise<Engine>) {
         result: {
           protocolVersion: params?.protocolVersion ?? "2024-11-05",
           capabilities: { tools: {} },
-          serverInfo: { name: "nodep", version: "0.1.0" },
+          serverInfo: { name: "flamingo", version: "0.1.0" },
         },
       });
     }
@@ -964,13 +1037,14 @@ export async function runMcpServer(opts: EngineOptions = {}): Promise<void> {
 
 const VERSION = "0.1.0";
 
-const USAGE = `nodep ${VERSION} — AI-native browser automation on Bun.WebView
+const USAGE = `flamingo ${VERSION} — AI-native browser automation on Bun.WebView
 
 USAGE
-  nodep <command> [url] [options]
+  flamingo <command> [url] [options]
 
 COMMANDS
   audit <url>         Health report: console errors, broken assets, layout overflow
+  crawl <url>         Click every control and report the dead ones
   tree <url>          Actionable elements with click-ready coordinates
   responsive <url>    Horizontal-overflow audit across viewports
   shot <url>          Screenshot the viewport to a file
@@ -983,7 +1057,8 @@ OPTIONS
   --width <n>         Viewport width  (default 1280)
   --height <n>        Viewport height (default 800)
   --viewports <list>  Comma-separated, e.g. 1920x1080,768x1024,375x812
-  --max <n>           Max elements for \`tree\` (default 100)
+  --max <n>           Max elements for \`tree\` (100) / \`crawl\` (20)
+  --dwell <ms>        How long to watch for a reaction per click (default 700)
   --settle <ms>       Wait after each resize (default 250)
   --out <path>        Output path for \`shot\`
   --format <fmt>      png (default) | jpeg | webp (webp needs --backend chrome)
@@ -998,11 +1073,12 @@ EXIT CODES
   3  runtime failure (browser launch or navigation failed)
 
 EXAMPLES
-  nodep audit http://localhost:3000
-  nodep audit http://localhost:3000 --json | jq .details
-  nodep responsive http://localhost:3000 --viewports 1920x1080,375x812
-  nodep tree http://localhost:3000 --backend chrome
-  nodep serve --backend chrome
+  flamingo audit http://localhost:3000
+  flamingo crawl http://localhost:3000
+  flamingo audit http://localhost:3000 --json | jq .details
+  flamingo responsive http://localhost:3000 --viewports 1920x1080,375x812
+  flamingo tree http://localhost:3000 --backend chrome
+  flamingo serve --backend chrome
 `;
 
 /** Exit codes, named so the call sites read as intent rather than magic numbers. */
@@ -1085,7 +1161,7 @@ function parseViewports(spec: string): Array<{ width: number; height: number }> 
 }
 
 function requireUrl(p: Parsed): string {
-  if (!p.url) throw new UsageError(`${p.command} needs a URL. Try: nodep ${p.command} http://localhost:3000`);
+  if (!p.url) throw new UsageError(`${p.command} needs a URL. Try: flamingo ${p.command} http://localhost:3000`);
   try {
     new URL(p.url);
   } catch {
@@ -1126,6 +1202,25 @@ function printAuditHuman(r: any) {
   if (d.deadClicks) {
     console.log(`  ${bold("dead clicks")} ${dim(`(${d.deadClicks})`)}`);
     for (const c of r.errors.deadClicks) console.log(`    ${red("✗")} (${c.coordinates.x}, ${c.coordinates.y})`);
+  }
+  console.log();
+}
+
+function printCrawlHuman(r: any) {
+  console.log(`${bold(r.targetUrl)}\n`);
+  const skipNote = r.skipped ? dim(` (${r.skipped} disabled, skipped)`) : "";
+  console.log(`  ${r.controlsFound} control${r.controlsFound === 1 ? "" : "s"} found, ${r.controlsTested} tested${skipNote}`);
+  console.log(`  ${green("✓")} ${r.alive} responded`);
+  if (!r.dead.length) {
+    console.log(green("\n✓ every control is wired up\n"));
+    return;
+  }
+  console.log(`  ${red("✗")} ${r.dead.length} dead\n`);
+  const w = Math.max(...r.dead.map((d: any) => String(d.ref).length));
+  for (const d of r.dead) {
+    const why = d.blockedBy ? `blocked by ${d.blockedBy}` : "no handler fired";
+    const label = d.text ? dim(` ${JSON.stringify(d.text)}`) : "";
+    console.log(`    ${red("✗")} ${String(d.ref).padEnd(w)}${label}  ${yellow(why)}`);
   }
   console.log();
 }
@@ -1182,7 +1277,7 @@ async function runCli(argv: string[]): Promise<number> {
     return EXIT.ok;
   }
 
-  if (!["audit", "tree", "responsive", "shot"].includes(p.command)) {
+  if (!["audit", "crawl", "tree", "responsive", "shot"].includes(p.command)) {
     throw new UsageError(`Unknown command: ${p.command}`);
   }
 
@@ -1206,6 +1301,12 @@ async function runCli(argv: string[]): Promise<number> {
         if (json) console.log(JSON.stringify(r));
         else printAuditHuman(r);
         return r.success ? EXIT.ok : EXIT.problems;
+      }
+      case "crawl": {
+        const r = await engine.crawl({ max: num(p.flags, "max", 20), dwellMs: num(p.flags, "dwell", 700) });
+        if (json) console.log(JSON.stringify(r));
+        else printCrawlHuman(r);
+        return r.dead.length ? EXIT.problems : EXIT.ok;
       }
       case "tree": {
         const r = await engine.getInteractiveTree({ max: num(p.flags, "max", 100) });
@@ -1244,7 +1345,7 @@ async function runCli(argv: string[]): Promise<number> {
 // ===========================================================================
 // SECTION 5 — Entry point
 //
-// Guarded so `import { Engine } from "./nodep.ts"` stays a pure library import.
+// Guarded so `import { Engine } from "./flamingo.ts"` stays a pure library import.
 // ===========================================================================
 
 if (import.meta.main) {
@@ -1252,7 +1353,7 @@ if (import.meta.main) {
     process.exit(await runCli(Bun.argv.slice(2)));
   } catch (e: any) {
     if (e instanceof UsageError) {
-      process.stderr.write(`${red("✗")} ${e.message}\n\n${dim("Run `nodep --help` for usage.")}\n`);
+      process.stderr.write(`${red("✗")} ${e.message}\n\n${dim("Run `flamingo --help` for usage.")}\n`);
       process.exit(EXIT.usage);
     }
     process.stderr.write(`${red("✗")} ${e?.stack ?? e}\n`);

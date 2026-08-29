@@ -13,8 +13,8 @@
 import { rmSync, mkdirSync, renameSync, readFileSync } from "node:fs";
 
 const OUT_DIR = "dist";
-const OUT = `${OUT_DIR}/nodep`;
-const BUILD = ["bun", "build", "--compile", "--minify", "--sourcemap=none", "nodep.ts", "--outfile", OUT];
+const OUT = `${OUT_DIR}/flamingo`;
+const BUILD = ["bun", "build", "--compile", "--minify", "--sourcemap=none", "flamingo.ts", "--outfile", OUT];
 
 const sha256 = (path: string) => new Bun.CryptoHasher("sha256").update(readFileSync(path)).digest("hex");
 

@@ -1,15 +1,39 @@
-# nodep
+# 🦩 flamingo
+
+### Unblind your agent.
 
 **AI-native browser automation and frontend testing — in one file, with zero dependencies.**
+
+An AI agent looking at your frontend is blind. Playwright hands it a DOM dump it
+burns thousands of tokens failing to parse. flamingo hands it a short list of
+what is actually visible and clickable — and, like the bird it is named after,
+filters the few things that matter out of a whole lake of mud.
 
 Built for **Zero Dependency 2026**, **Track A — Developer Tools & CLI**.
 Runtime: Bun ≥ 1.4. Runtime dependencies: **none**.
 
 The entire project — library, CLI and MCP server — is a single source file,
-[`nodep.ts`](./nodep.ts), using nothing but the Bun standard library.
+[`flamingo.ts`](./flamingo.ts), using nothing but the Bun standard library.
 
 ```bash
-nodep audit http://localhost:3000
+flamingo crawl http://localhost:3000
+```
+```
+http://localhost:3000
+
+  14 controls found, 14 tested
+  ✓ 12 responded
+  ✗ 2 dead
+
+    ✗ button#checkout "Checkout"  blocked by div.modal-backdrop
+    ✗ a.help          "Help"      no handler fired
+```
+
+Every control on the page, clicked, with the dead ones named and explained —
+swallowed by an overlay, or simply never wired up.
+
+```bash
+flamingo audit http://localhost:3000
 ```
 ```
 http://localhost:3000  webkit backend
@@ -31,14 +55,14 @@ http://localhost:3000  webkit backend
 One command, and **no install step** — there are no dependencies to install:
 
 ```bash
-bun run build     # -> ./dist/nodep, a standalone 61MB binary
-./dist/nodep audit http://localhost:3000
+bun run build     # -> ./dist/flamingo, a standalone 61MB binary
+./dist/flamingo audit http://localhost:3000
 ```
 
 Or run the source directly:
 
 ```bash
-bun run nodep.ts audit http://localhost:3000
+bun run flamingo.ts audit http://localhost:3000
 ```
 
 Verified: `bun run build` and the full test suite both pass with `node_modules`
@@ -57,7 +81,7 @@ Manifest
   ✓ peerDependencies: empty
   ✓ optionalDependencies: empty
   ✓ bundledDependencies: empty
-Imports in nodep.ts
+Imports in flamingo.ts
   ✓ node:fs — standard library
   ✓ node:path — standard library
 
@@ -79,10 +103,10 @@ Compiles twice to the same output path and compares digests:
 
 ```
 REPRODUCIBLE — both builds are byte-identical
-  sha256  8caf3cd060c779a8b8e5a0288cd967e0263c9ad99c14a87f0297840a2e4cb87d
+  sha256  084aa53b0be58557ca2aef26886d40829caad22c5439f63c30d5c772df4de3c1
 ```
 
-*(Bun embeds the output filename in the executable, so the comparison must fix
+*(Hash is for the current committed source. Bun embeds the output filename in the executable, so the comparison must fix
 the output path — the path is an input.)*
 
 ---
@@ -97,7 +121,7 @@ an AI agent they have three problems:
    to a model, burning thousands of tokens on markup.
 3. **Selector fragility** — `div > span.submit-btn` breaks the moment layout shifts.
 
-`nodep` returns a compact, viewport-filtered list of only what is actually
+`flamingo` returns a compact, viewport-filtered list of only what is actually
 clickable, with pixel coordinates, and drives the page with native events.
 
 ```jsonc
@@ -120,9 +144,10 @@ genuinely actionable. That filtering is what keeps the payload small.
 ## CLI
 
 ```
-nodep <command> [url] [options]
+flamingo <command> [url] [options]
 
   audit <url>         Health report: console errors, broken assets, layout overflow
+  crawl <url>         Click every control and report the dead ones
   tree <url>          Actionable elements with click-ready coordinates
   responsive <url>    Horizontal-overflow audit across viewports
   shot <url>          Screenshot the viewport to a file
@@ -131,7 +156,7 @@ nodep <command> [url] [options]
 
 Key options: `--json`, `--backend webkit|chrome`, `--width`/`--height`,
 `--viewports 1920x1080,375x812`, `--max`, `--settle`, `--out`, `--no-color`.
-Full list: `nodep --help`.
+Full list: `flamingo --help`.
 
 **Exit codes** — designed for CI:
 
@@ -143,7 +168,7 @@ Full list: `nodep --help`.
 | `3` | Runtime failure (browser launch or navigation failed) |
 
 ```bash
-nodep audit "$STAGING_URL" --json > report.json || echo "frontend regressions found"
+flamingo audit "$STAGING_URL" --json > report.json || echo "frontend regressions found"
 ```
 
 `--json` writes exactly one JSON document to stdout and nothing else — no
@@ -153,7 +178,7 @@ automatically when stdout is not a TTY or `NO_COLOR` is set.
 ## Library
 
 ```ts
-import { Engine } from "./nodep.ts";
+import { Engine } from "./flamingo.ts";
 
 await using e = await Engine.open({ url: "http://localhost:3000" });
 
@@ -177,7 +202,8 @@ const report = await e.compileHealthReport();
 | `pressKey({ key, modifiers })` | `"Enter"`, `"Tab"`, chords |
 | `hoverCoordinate({ x, y })` | **chrome only** |
 | `scroll({ dx, dy })` / `({ selector })` | |
-| `detectDeadClicks({ x, y, timeoutMs })` | DOM + console + navigation + network |
+| `detectDeadClicks({ x, y, timeoutMs })` | DOM + console + navigation + focus + network |
+| `crawl({ max, dwellMs })` | Click every control; report the dead ones and why |
 | `captureRuntimeLogs()` | Includes load-time errors |
 | `interceptTraffic()` | **chrome only** |
 | `scanBrokenAssets()` | Status codes on chrome only |
@@ -196,7 +222,7 @@ is hand-written — no SDK.
 ```json
 {
   "mcpServers": {
-    "nodep": { "command": "bun", "args": ["run", "/path/to/nodep/nodep.ts", "serve"] }
+    "flamingo": { "command": "bun", "args": ["run", "/path/to/flamingo/flamingo.ts", "serve"] }
   }
 }
 ```
@@ -227,11 +253,15 @@ never measured is never mistaken for a measured zero.
   document replacement. `detectDeadClicks` installs a `MutationObserver` first.
 - **Console and network capture cannot be lazy.** Both are enabled before the
   first navigation, or load-time failures — the ones that matter — are gone.
+- **A click that only moves focus is not dead.** Clicking a text field focuses
+  it and changes nothing else; counting that as dead flags every input on the
+  page. Focus landing on a *button*, though, proves nothing — buttons take focus
+  on any click — so only fields count.
 
 ## Tests
 
 ```bash
-bun test          # 54 tests against a real browser and a real fixture server
+bun test          # 59 tests against a real browser and a real fixture server
 bun run typecheck
 ```
 

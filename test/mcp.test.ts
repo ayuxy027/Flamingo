@@ -12,7 +12,7 @@ afterAll(() => server.stop(true));
 
 /** Drive the server the way a real MCP client does: JSON-RPC lines in, lines out. */
 async function rpc(requests: unknown[]): Promise<any[]> {
-  const proc = Bun.spawn(["bun", "run", "nodep.ts", "serve"], {
+  const proc = Bun.spawn(["bun", "run", "flamingo.ts", "serve"], {
     stdin: "pipe",
     stdout: "pipe",
     stderr: "pipe",
@@ -31,7 +31,7 @@ test("initialize and tools/list return valid JSON-RPC", async () => {
   ]);
 
   expect(init.id).toBe(1);
-  expect(init.result.serverInfo.name).toBe("nodep");
+  expect(init.result.serverInfo.name).toBe("flamingo");
   expect(init.result.capabilities.tools).toBeDefined();
 
   expect(list.result.tools.length).toBeGreaterThanOrEqual(15);
@@ -52,7 +52,7 @@ test("tools/call drives a real browser end to end", async () => {
     { jsonrpc: "2.0", id: 3, method: "tools/call", params: { name: "getInteractiveTree", arguments: {} } },
   ]);
 
-  expect(JSON.parse(gotoRes.result.content[0].text).title).toBe("nodep fixture");
+  expect(JSON.parse(gotoRes.result.content[0].text).title).toBe("flamingo fixture");
 
   const tree = JSON.parse(treeRes.result.content[0].text);
   expect(tree.interactiveElements.map((i: any) => i.ref)).toContain("button#live");
