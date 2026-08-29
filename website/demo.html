@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>flamingo demo — a deliberately broken app</title>
+<title>flamingo demo: a deliberately broken app</title>
 <style>
   :root { --ink:#16151a; --muted:#6b6875; --line:#e6e3ea; --pink:#ff4d8d; }
   * { box-sizing: border-box; }
@@ -55,7 +55,7 @@
       <button id="deadcta">Learn More</button>
     </div>
     <div class="out" id="heroOut"></div>
-    <p><small>“Learn More” has no handler at all.</small></p>
+    <p><small>"Learn More" has no handler at all.</small></p>
   </section>
 
   <section id="features">
@@ -65,7 +65,7 @@
       <button id="busy" class="primary">Submit</button>
     </div>
     <div class="out" id="featOut"></div>
-    <p><small>“Submit” throws if clicked again while its request is still in flight.</small></p>
+    <p><small>"Submit" throws if clicked again while its request is still in flight.</small></p>
   </section>
 
   <section id="pricing">
@@ -77,7 +77,7 @@
         <span id="veil"></span>
       </span>
     </div>
-    <p><small>“Upgrade” sits under a transparent overlay and can never be clicked.</small></p>
+    <p><small>"Upgrade" sits under a transparent overlay and can never be clicked.</small></p>
     <div id="wide"></div>
     <p><small>That pink bar is 1400px wide and overflows narrow viewports.</small></p>
   </section>
@@ -123,7 +123,7 @@
   $("busy").addEventListener("click", async () => {
     if (busy) throw new Error("re-entrant submit while a request is in flight");
     busy = true;
-    say("featOut", "Submitting…");
+    say("featOut", "Submitting...");
     await new Promise((r) => setTimeout(r, 500));
     say("featOut", "Submitted.");
     busy = false;
