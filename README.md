@@ -255,7 +255,19 @@ patterns against every live control:
 That bug is invisible to `crawl` — one click on `#busy` is perfectly healthy.
 Nothing here is random, so a finding reproduces exactly.
 
-Key options: `--json`, `--backend webkit|chrome`, `--width`/`--height`,
+### Testing something behind a login
+
+Storage is ephemeral by default, so runs never contaminate each other. Point
+`--profile` at a directory to keep the session between runs:
+
+```bash
+flamingo interact http://localhost:3000/app --profile .flamingo/session
+```
+
+Log in once (by hand, or with `typeInput` + `clickCoordinate` from the library)
+and every later run reuses those cookies.
+
+Key options: `--json`, `--backend webkit|chrome`, `--width`/`--height`, `--profile`,
 `--viewports 1920x1080,375x812`, `--max`, `--settle`, `--out`, `--no-color`.
 Full list: `flamingo --help`.
 
@@ -416,7 +428,7 @@ observed early — which is why `--dwell` exists.
 ## Tests
 
 ```bash
-bun test          # 99 tests against a real browser and a real fixture server
+bun test          # 98 tests against a real browser and a real fixture server
 bun run typecheck
 ```
 

@@ -540,6 +540,14 @@ export interface EngineOptions {
   bufferSize?: number;
   /** Called as long-running sweeps advance. Use it to show progress. */
   onProgress?: (stage: string, detail: string) => void;
+  /**
+   * Where cookies, localStorage and IndexedDB live.
+   *
+   * Ephemeral by default, so runs never contaminate each other. Point it at a
+   * directory to keep a session between runs — which is how you test an app
+   * that requires a login without logging in every time.
+   */
+  profileDirectory?: string;
   /** How long an in-page evaluate may stall before the view is rebuilt. @default 10000 */
   evaluateTimeoutMs?: number;
 }
@@ -702,6 +710,7 @@ export class Engine {
       width: this.width,
       height: this.height,
       backend,
+      ...(opts.profileDirectory ? { dataStore: { directory: opts.profileDirectory } } : {}),
       // Wired at construction so page errors are captured before any navigation.
       console: (type: string, ...args: unknown[]) => this.pushConsole(type, args),
     };
@@ -2232,6 +2241,7 @@ const GLOBAL_FLAGS: Array<[string, string]> = [
   ["--chrome-path <p>", "Chrome/Chromium/Brave executable (or set BUN_CHROME_PATH)"],
   ["--width <n>", "Viewport width (default 1280)"],
   ["--height <n>", "Viewport height (default 800)"],
+  ["--profile <dir>", "Persist cookies and storage here, to stay logged in between runs"],
   ["--no-color", "Disable ANSI colour"],
   ["-h, --help", "Show help; after a command, show that command's help"],
   ["-v, --version", "Show version"],
@@ -2824,6 +2834,7 @@ async function runCli(argv: string[]): Promise<number> {
     chromePath: str(p.flags, "chrome-path"),
     width: num(p.flags, "width", 1280),
     height: num(p.flags, "height", 800),
+    profileDirectory: str(p.flags, "profile"),
   };
 
   if (p.command === "doctor") return runDoctor(json);

@@ -307,3 +307,39 @@ describe("waiting for things to happen", () => {
     expect(e.waitFor({})).rejects.toThrow(/selector, textContains/);
   }, 60_000);
 });
+
+describe("session persistence", () => {
+  test("a profile directory keeps storage between runs; ephemeral does not", async () => {
+    const { rmSync } = await import("node:fs");
+    const dir = `${process.env.TMPDIR ?? "/tmp"}/flamingo-profile-test`;
+    rmSync(dir, { recursive: true, force: true });
+
+    const srv = Bun.serve({ port: 0, fetch: () => new Response(
+      `<!doctype html><body><div id="v"></div><script>
+        document.getElementById('v').textContent = localStorage.getItem('token') || 'anonymous';
+       </script></body>`, { headers: { "content-type": "text/html" } }) });
+    const u = `http://127.0.0.1:${srv.port}/`;
+    const read = (e: Engine) => e.view.evaluate<string>("document.getElementById('v').textContent");
+
+    try {
+      {
+        using e = await Engine.open({ width: 400, height: 300, url: u, profileDirectory: dir });
+        expect(await read(e)).toBe("anonymous");
+        await e.view.evaluate("localStorage.setItem('token','logged-in-user'), 1");
+      }
+      {
+        // this is what makes testing a logged-in app possible
+        using e = await Engine.open({ width: 400, height: 300, url: u, profileDirectory: dir });
+        expect(await read(e)).toBe("logged-in-user");
+      }
+      {
+        // and the default must stay isolated, or runs contaminate each other
+        using e = await Engine.open({ width: 400, height: 300, url: u });
+        expect(await read(e)).toBe("anonymous");
+      }
+    } finally {
+      srv.stop(true);
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }, 90_000);
+});
