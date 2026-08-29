@@ -158,7 +158,7 @@ emit("skills/flamingo/SKILL.md", SKILL_MD);
 
 emit(
   "mcp/config.json",
-  JSON.stringify({ mcpServers: { flamingo: { command: "bunx", args: ["flamingo", "serve"] } } }, null, 2) + "\n",
+  JSON.stringify({ mcpServers: { flamingo: { command: "bunx", args: ["tryflamingo", "serve"] } } }, null, 2) + "\n",
 );
 emit("mcp/tools.json", JSON.stringify(doc, null, 2) + "\n");
 

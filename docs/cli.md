@@ -2,7 +2,7 @@
 
 # CLI reference
 
-Flamingo 0.1.0 - AI Native Frontend Testing Toolkit
+Flamingo 0.1.1 - AI Native Frontend Testing Toolkit
 
 ## Commands
 

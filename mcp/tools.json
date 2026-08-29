@@ -1,6 +1,6 @@
 {
   "name": "tryflamingo",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "tagline": "AI Native Frontend Testing Toolkit",
   "runtime": {
     "bun": ">=1.4.0"

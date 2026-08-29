@@ -3,7 +3,7 @@
     "flamingo": {
       "command": "bunx",
       "args": [
-        "flamingo",
+        "tryflamingo",
         "serve"
       ]
     }

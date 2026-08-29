@@ -110,7 +110,7 @@ Full methods: [`docs/api.md`](./docs/api.md). Key ones: `observe`, `getInteracti
 Your agent calls tools, not CLI. Hand-written JSON-RPC, no SDK.
 
 ```json
-{ "mcpServers": { "flamingo": { "command": "bunx", "args": ["flamingo", "serve"] } } }
+{ "mcpServers": { "flamingo": { "command": "bunx", "args": ["tryflamingo", "serve"] } } }
 ```
 
 `flamingo init` does this for you. See [`docs/mcp-tools.md`](./docs/mcp-tools.md) for 24 tools.

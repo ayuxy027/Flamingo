@@ -2188,7 +2188,7 @@ Destructive-looking controls are skipped by the sweep tools and confirm() is ans
 To check a page rather than drive it: compileHealthReport, crawl, interact,
 stressTest, auditResponsiveness.`;
 
-const VERSION = "0.1.0";
+const VERSION = "0.1.1";
 const TAGLINE = "AI Native Frontend Testing Toolkit";
 
 interface CommandSpec {
@@ -2775,7 +2775,7 @@ async function runInit(p: Parsed, json: boolean): Promise<number> {
   const selfPath = Bun.main;
   const installed = selfPath.includes("node_modules");
   const command = installed ? "bunx" : "bun";
-  const args = installed ? ["flamingo", "serve"] : ["run", selfPath, "serve"];
+  const args = installed ? ["tryflamingo", "serve"] : ["run", selfPath, "serve"];
   const backend = str(p.flags, "backend");
   if (backend) args.push("--backend", backend);
 
