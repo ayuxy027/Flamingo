@@ -26,7 +26,9 @@
     "test": "bun test",
     "typecheck": "tsc --noEmit",
     "proof": "bun run scripts/dependency-proof.ts",
-    "verify:build": "bun run scripts/verify-reproducible.ts"
+    "verify:build": "bun run scripts/verify-reproducible.ts",
+    "docs": "bun run scripts/generate-docs.ts",
+    "docs:check": "bun run scripts/generate-docs.ts --check"
   },
   "keywords": [
     "bun",

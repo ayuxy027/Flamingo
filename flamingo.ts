@@ -2068,6 +2068,7 @@ export class Engine {
 
   // -------------------------------------------------------------- lifecycle
 
+  /** Close the view and release its browser process. Idempotent. */
   close(): void {
     if (this.closed) return;
     this.closed = true;
@@ -2441,7 +2442,7 @@ export async function runMcpServer(opts: EngineOptions = {}): Promise<void> {
  * Kept here rather than as a separate file so the project stays one source file
  * and the skill can never drift from the tool surface it documents.
  */
-const SKILL_MD = `---
+export const SKILL_MD = `---
 name: flamingo
 description: Drive and test a running web frontend through a real browser. Use when asked to test, QA, debug, explore or interact with a web app - to find dead buttons, broken assets, layout breaks, console errors, or to verify a UI flow actually works end to end.
 ---
@@ -2546,7 +2547,7 @@ const MCP_SERVER_KEY = "flamingo";
  * Sent in the initialize response, so every MCP client gets the operating
  * instructions — not only the ones that also read a skill file.
  */
-const MCP_INSTRUCTIONS = `flamingo drives a real browser in a loop: observe, act, observe.
+export const MCP_INSTRUCTIONS = `flamingo drives a real browser in a loop: observe, act, observe.
 
 Call \`observe\` to see where you are. Then act (clickCoordinate, typeInput, pressKey,
 scroll) — every acting tool returns a fresh observation in its result, so you do not
@@ -3148,7 +3149,7 @@ function runDoctor(json: boolean): number {
  * command with its flags and exit codes. An agent reads this once instead of
  * reading the docs.
  */
-function schemaDoc() {
+export function schemaDoc() {
   return {
     name: "@ayuxy027/flamingo",
     version: VERSION,

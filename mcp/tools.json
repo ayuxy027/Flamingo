@@ -1,0 +1,700 @@
+{
+  "name": "@ayuxy027/flamingo",
+  "version": "0.1.0",
+  "tagline": "AI Native Frontend Testing Toolkit",
+  "runtime": {
+    "bun": ">=1.4.0"
+  },
+  "backends": {
+    "default": "webkit",
+    "available": [
+      "webkit",
+      "chrome"
+    ],
+    "chromeOnly": [
+      "interceptTraffic",
+      "hoverCoordinate",
+      "HTTP status codes in scanBrokenAssets"
+    ]
+  },
+  "exitCodes": {
+    "0": "completed, nothing wrong found",
+    "1": "completed, problems found",
+    "2": "usage error",
+    "3": "runtime failure (browser launch or navigation failed)"
+  },
+  "commands": [
+    {
+      "name": "audit",
+      "args": "<url>",
+      "summary": "Health report: console errors, broken assets, layout overflow",
+      "flags": [
+        "--viewports <list>",
+        "--json"
+      ],
+      "exits": "0 if nothing is wrong, 1 if any problem is found",
+      "examples": [
+        "flamingo audit http://localhost:3000",
+        "flamingo audit http://localhost:3000 --json | jq .details",
+        "flamingo audit https://staging.example.com --backend chrome"
+      ]
+    },
+    {
+      "name": "crawl",
+      "args": "<url>",
+      "summary": "Click every control and report the dead ones",
+      "flags": [
+        "--max <n>",
+        "--dwell <ms>",
+        "--json"
+      ],
+      "exits": "0 if every control responds, 1 if any is dead",
+      "examples": [
+        "flamingo crawl http://localhost:3000",
+        "flamingo crawl http://localhost:3000 --max 50 --dwell 1200"
+      ]
+    },
+    {
+      "name": "scroll",
+      "args": "<url>",
+      "summary": "Scroll the whole page and map everything on it",
+      "flags": [
+        "--max-steps <n>",
+        "--settle <ms>",
+        "--json"
+      ],
+      "exits": "0 unless the page fails to load",
+      "examples": [
+        "flamingo scroll http://localhost:3000",
+        "flamingo scroll http://localhost:3000 --json | jq .outline"
+      ]
+    },
+    {
+      "name": "interact",
+      "args": "<url>",
+      "summary": "Scroll the page and exercise every control on it",
+      "flags": [
+        "--max-controls <n>",
+        "--dwell <ms>",
+        "--no-fill",
+        "--include-destructive",
+        "--json"
+      ],
+      "exits": "0 if everything responded, 1 if any control is dead or drops input",
+      "examples": [
+        "flamingo interact http://localhost:3000",
+        "flamingo interact http://localhost:3000 --max-controls 100 --json"
+      ]
+    },
+    {
+      "name": "stress",
+      "args": "<url>",
+      "summary": "Try to break the page with hostile interaction patterns",
+      "flags": [
+        "--targets <n>",
+        "--json"
+      ],
+      "exits": "0 if nothing broke, 1 if any scenario triggered errors or left the page unresponsive",
+      "examples": [
+        "flamingo stress http://localhost:3000",
+        "flamingo stress http://localhost:3000 --targets 5 --json"
+      ]
+    },
+    {
+      "name": "tree",
+      "args": "<url>",
+      "summary": "Actionable elements with click-ready coordinates",
+      "flags": [
+        "--max <n>",
+        "--json"
+      ],
+      "exits": "0 always (unless the page fails to load)",
+      "examples": [
+        "flamingo tree http://localhost:3000 --json",
+        "flamingo tree http://localhost:3000 --max 20"
+      ]
+    },
+    {
+      "name": "responsive",
+      "args": "<url>",
+      "summary": "Horizontal-overflow audit across viewports",
+      "flags": [
+        "--viewports <list>",
+        "--settle <ms>",
+        "--json"
+      ],
+      "exits": "0 if no viewport overflows, 1 if any does",
+      "examples": [
+        "flamingo responsive http://localhost:3000 --viewports 1920x1080,375x812"
+      ]
+    },
+    {
+      "name": "shot",
+      "args": "<url>",
+      "summary": "Screenshot the viewport to a file",
+      "flags": [
+        "--out <path>",
+        "--format <png|jpeg|webp>",
+        "--json"
+      ],
+      "exits": "0 on success",
+      "examples": [
+        "flamingo shot http://localhost:3000 --out shot.png"
+      ]
+    },
+    {
+      "name": "serve",
+      "args": "",
+      "summary": "Run the MCP server on stdio",
+      "flags": [
+        "--backend <name>",
+        "--width <n>",
+        "--height <n>"
+      ],
+      "exits": "0 when the client closes stdin",
+      "examples": [
+        "flamingo serve",
+        "flamingo serve --backend chrome"
+      ]
+    },
+    {
+      "name": "init",
+      "args": "",
+      "summary": "Wire flamingo into this project for an AI agent",
+      "flags": [
+        "--dir <path>",
+        "--backend <name>",
+        "--skill-only",
+        "--mcp-only",
+        "--force",
+        "--json"
+      ],
+      "exits": "0 on success",
+      "examples": [
+        "flamingo init",
+        "flamingo init --backend chrome",
+        "flamingo init --dir ../my-app"
+      ]
+    },
+    {
+      "name": "doctor",
+      "args": "",
+      "summary": "Check the environment and report what works here",
+      "flags": [
+        "--json"
+      ],
+      "exits": "0 if the toolkit is usable, 1 if a required piece is missing",
+      "examples": [
+        "flamingo doctor",
+        "flamingo doctor --json"
+      ]
+    },
+    {
+      "name": "schema",
+      "args": "",
+      "summary": "Print the machine-readable API description as JSON",
+      "flags": [],
+      "exits": "0 always",
+      "examples": [
+        "flamingo schema",
+        "flamingo schema | jq '.tools[].name'"
+      ]
+    }
+  ],
+  "tools": [
+    {
+      "name": "goto",
+      "description": "Navigate to a URL and wait for the main frame to finish loading.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "observe": {
+            "type": "boolean"
+          },
+          "url": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "url"
+        ]
+      }
+    },
+    {
+      "name": "observe",
+      "description": "One step of the agent loop: current url and title, the actionable elements with click-ready coordinates, what is covering anything unreachable, plus the console errors and failed requests SINCE THE LAST observe, and a `changed` flag that is false when nothing moved. Call this first, act, then read the observation returned by the action. `changed: false` after an action means the action achieved nothing — try something else rather than repeating it.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "maxElements": {
+            "type": "number"
+          },
+          "format": {
+            "enum": [
+              "compact",
+              "json"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "name": "getInteractiveTree",
+      "description": "Compact list of every element that can actually be acted on, with click-ready CSS-space centre coordinates. Filtered to the viewport and to elements that are not occluded, so it stays small on large pages. Also reports blockedBy — what is covering the unreachable controls, which is how you spot a cookie wall or modal that must be dismissed first. Start here to decide what to click.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "max": {
+            "type": "number"
+          }
+        }
+      }
+    },
+    {
+      "name": "detectPointerBlocker",
+      "description": "Explain whether a click at (x, y) reaches an interactive element, and name the element blocking it if not. Use when a click did nothing.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "x": {
+            "type": "number"
+          },
+          "y": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "x",
+          "y"
+        ]
+      }
+    },
+    {
+      "name": "clickCoordinate",
+      "description": "Click. Give x/y for a raw coordinate click, or selector to wait for the element to become actionable first.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "observe": {
+            "type": "boolean"
+          },
+          "x": {
+            "type": "number"
+          },
+          "y": {
+            "type": "number"
+          },
+          "selector": {
+            "type": "string"
+          },
+          "button": {
+            "enum": [
+              "left",
+              "right",
+              "middle"
+            ]
+          },
+          "clickCount": {
+            "type": "number"
+          }
+        }
+      }
+    },
+    {
+      "name": "typeInput",
+      "description": "Type into the focused element. Default is a fast paste-style insert; set realKeys or typingDelayMs to send per-character key events for fields that validate on keydown.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "observe": {
+            "type": "boolean"
+          },
+          "text": {
+            "type": "string"
+          },
+          "typingDelayMs": {
+            "type": "number"
+          },
+          "realKeys": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "text"
+        ]
+      }
+    },
+    {
+      "name": "pressKey",
+      "description": "Press a named key (\"Enter\", \"Tab\", \"Escape\", arrows) or a chord with modifiers.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "observe": {
+            "type": "boolean"
+          },
+          "key": {
+            "type": "string"
+          },
+          "modifiers": {
+            "type": "array",
+            "items": {
+              "enum": [
+                "Shift",
+                "Control",
+                "Alt",
+                "Meta"
+              ]
+            }
+          }
+        },
+        "required": [
+          "key"
+        ]
+      }
+    },
+    {
+      "name": "hoverCoordinate",
+      "description": "Hover to reveal popovers, dropdowns and hidden overlays. Requires --backend chrome.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "observe": {
+            "type": "boolean"
+          },
+          "x": {
+            "type": "number"
+          },
+          "y": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "x",
+          "y"
+        ]
+      }
+    },
+    {
+      "name": "scroll",
+      "description": "Scroll by a pixel delta (dx/dy) or bring a selector into view.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "observe": {
+            "type": "boolean"
+          },
+          "dx": {
+            "type": "number"
+          },
+          "dy": {
+            "type": "number"
+          },
+          "selector": {
+            "type": "string"
+          },
+          "block": {
+            "enum": [
+              "start",
+              "center",
+              "end",
+              "nearest"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "name": "detectDeadClicks",
+      "description": "Click a coordinate and report whether anything happened: DOM mutations, console output, navigation, and network requests. Use to prove a control is wired up.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "observe": {
+            "type": "boolean"
+          },
+          "x": {
+            "type": "number"
+          },
+          "y": {
+            "type": "number"
+          },
+          "timeoutMs": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "x",
+          "y"
+        ]
+      }
+    },
+    {
+      "name": "crawl",
+      "description": "Click every actionable control on the page and report which ones do nothing, and why — swallowed by an overlay, or no handler fired at all. The fastest way to find broken buttons across a page.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "max": {
+            "type": "number"
+          },
+          "dwellMs": {
+            "type": "number"
+          }
+        }
+      }
+    },
+    {
+      "name": "waitFor",
+      "description": "Wait until an element appears and is visible, by CSS selector and/or the text it contains. Returns it with click-ready coordinates. Use after clicking something to wait for the result instead of guessing at a sleep.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "selector": {
+            "type": "string"
+          },
+          "textContains": {
+            "type": "string"
+          },
+          "timeoutMs": {
+            "type": "number"
+          }
+        }
+      }
+    },
+    {
+      "name": "waitForGone",
+      "description": "Wait until an element matching a selector and/or text is gone — a loading spinner, a modal, a toast. Complements waitFor.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "selector": {
+            "type": "string"
+          },
+          "textContains": {
+            "type": "string"
+          },
+          "timeoutMs": {
+            "type": "number"
+          }
+        }
+      }
+    },
+    {
+      "name": "goBack",
+      "description": "Go back in browser history. Runs under a deadline and reports timedOut rather than hanging, because back can fail to resolve when there is no history left.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "observe": {
+            "type": "boolean"
+          },
+          "timeoutMs": {
+            "type": "number"
+          }
+        }
+      }
+    },
+    {
+      "name": "reload",
+      "description": "Reload the current page, under a deadline.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "observe": {
+            "type": "boolean"
+          },
+          "timeoutMs": {
+            "type": "number"
+          }
+        }
+      }
+    },
+    {
+      "name": "scrollScan",
+      "description": "Scroll the entire page and return one merged map: every interactive element in document-space coordinates, the heading outline, what is pinned over the content, and whether the page lazy-loads. Use this first to understand a page that is taller than one viewport.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "maxSteps": {
+            "type": "number"
+          },
+          "settleMs": {
+            "type": "number"
+          },
+          "maxElements": {
+            "type": "number"
+          }
+        }
+      }
+    },
+    {
+      "name": "interact",
+      "description": "Scroll the whole page and exercise every control: click buttons and links, type sample data into fields and verify it was accepted. Controls with destructive-looking labels are skipped unless includeDestructive is set. Broader and slower than crawl.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "maxControls": {
+            "type": "number"
+          },
+          "dwellMs": {
+            "type": "number"
+          },
+          "fillFields": {
+            "type": "boolean"
+          },
+          "includeDestructive": {
+            "type": "boolean"
+          }
+        }
+      }
+    },
+    {
+      "name": "stressTest",
+      "description": "Run a fixed sequence of hostile interaction patterns — rapid clicks, double clicks, reload mid-action, navigate away mid-action, resize and scroll mid-action, interleaved clicks — and report the console errors each triggers. Finds race conditions ordinary testing misses. Deterministic and reproducible.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "maxTargets": {
+            "type": "number"
+          },
+          "settleMs": {
+            "type": "number"
+          }
+        }
+      }
+    },
+    {
+      "name": "captureRuntimeLogs",
+      "description": "Buffered console output and page exceptions. Capture starts before the first navigation, so load-time errors are included.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "type": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    {
+      "name": "interceptTraffic",
+      "description": "Buffered network requests with methods and response status codes. Requires --backend chrome.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "filterUrlPattern": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    {
+      "name": "scanBrokenAssets",
+      "description": "Broken images, stylesheets and failed requests. HTTP status codes are included on the chrome backend only.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {}
+      }
+    },
+    {
+      "name": "auditResponsiveness",
+      "description": "Resize through viewports and report horizontal overflow with the worst offending elements at each size.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "viewports": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "width": {
+                  "type": "number"
+                },
+                "height": {
+                  "type": "number"
+                }
+              },
+              "required": [
+                "width",
+                "height"
+              ]
+            }
+          },
+          "settleMs": {
+            "type": "number"
+          }
+        }
+      }
+    },
+    {
+      "name": "captureViewport",
+      "description": "Screenshot the viewport to a file. Returns the path plus cssSize, pixelSize and deviceScaleFactor — image pixels are scaled by that factor, while all click coordinates are CSS-space. Set base64 only if you need the bytes inline; they are large.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "format": {
+            "enum": [
+              "png",
+              "jpeg",
+              "webp"
+            ]
+          },
+          "quality": {
+            "type": "number"
+          },
+          "path": {
+            "type": "string"
+          },
+          "base64": {
+            "type": "boolean"
+          }
+        }
+      }
+    },
+    {
+      "name": "compileHealthReport",
+      "description": "Consolidated scorecard: console errors, broken assets, dead clicks and layout overflow, with a pass/fail total.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "viewports": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "width": {
+                  "type": "number"
+                },
+                "height": {
+                  "type": "number"
+                }
+              },
+              "required": [
+                "width",
+                "height"
+              ]
+            }
+          },
+          "deadClickTargets": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "x": {
+                  "type": "number"
+                },
+                "y": {
+                  "type": "number"
+                }
+              },
+              "required": [
+                "x",
+                "y"
+              ]
+            }
+          }
+        }
+      }
+    }
+  ]
+}

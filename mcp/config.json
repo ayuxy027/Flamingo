@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "flamingo": {
+      "command": "bunx",
+      "args": [
+        "flamingo",
+        "serve"
+      ]
+    }
+  }
+}
