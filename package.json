@@ -1,0 +1,45 @@
+{
+  "name": "nodep",
+  "version": "0.1.0",
+  "description": "AI-native browser automation on Bun.WebView. Zero runtime dependencies.",
+  "type": "module",
+  "module": "nodep.ts",
+  "main": "nodep.ts",
+  "types": "nodep.ts",
+  "exports": {
+    ".": "./nodep.ts"
+  },
+  "bin": {
+    "nodep": "./nodep.ts"
+  },
+  "files": [
+    "nodep.ts",
+    "README.md",
+    "STDLIB.md",
+    "LICENSE"
+  ],
+  "engines": {
+    "bun": ">=1.4.0"
+  },
+  "scripts": {
+    "build": "bun build --compile --minify --sourcemap=none nodep.ts --outfile dist/nodep",
+    "test": "bun test",
+    "typecheck": "tsc --noEmit",
+    "proof": "bun run scripts/dependency-proof.ts",
+    "verify:build": "bun run scripts/verify-reproducible.ts"
+  },
+  "keywords": [
+    "bun",
+    "webview",
+    "browser-automation",
+    "e2e",
+    "mcp",
+    "ai-agent",
+    "cdp"
+  ],
+  "license": "MIT",
+  "dependencies": {},
+  "devDependencies": {
+    "@types/bun": "^1.4.0"
+  }
+}
