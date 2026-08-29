@@ -144,3 +144,73 @@ describe("init — wiring a project up", () => {
     }
   }, 60_000);
 });
+
+describe("token cost of the loop", () => {
+  test("compact rendering keeps what drives a decision and drops the rest", async () => {
+    using e = await Engine.open({ width: 800, height: 400, url });
+    const o = await e.observe();
+    const { renderObservation } = await import("../flamingo.ts");
+    const text = renderObservation(o);
+
+    // everything the next decision needs
+    expect(text).toContain("button#accept");
+    expect(text).toContain(`(${o.elements[0]!.center.x},${o.elements[0]!.center.y})`);
+    expect(text).toContain("blocked 2 behind div#wall");
+    expect(text).toContain("changed true");
+
+    // an agent re-reads this every turn, so the multiplier matters
+    const json = JSON.stringify(o);
+    expect(text.length).toBeLessThan(json.length * 0.6);
+  }, 60_000);
+
+  test("a no-op is spelled out, not left for the agent to infer", async () => {
+    using e = await Engine.open({ width: 800, height: 400, url });
+    const { renderObservation } = await import("../flamingo.ts");
+    await e.observe();
+    await e.observe();
+    expect(renderObservation(await e.observe())).toContain("last action did nothing");
+  }, 60_000);
+
+  test("the title comes from the document, not the racy view.title", async () => {
+    using e = await Engine.open({ width: 800, height: 400, url });
+    const o = await e.observe();
+    // WebView.title is populated asynchronously by the host and is empty on
+    // pages that take a moment; document.title is authoritative and free.
+    expect(o.title).toBe(await e.view.evaluate<string>("document.title"));
+  }, 60_000);
+
+  test("elements that must not be clicked are flagged in the text", async () => {
+    const srv = Bun.serve({ port: 0, fetch: () => new Response(
+      `<!doctype html><body style="margin:0"><select id="s" style="width:120px;height:30px"><option>a</option></select>
+       <a id="out" href="https://example.com/x">Out</a></body>`, { headers: { "content-type": "text/html" } }) });
+    try {
+      using e = await Engine.open({ width: 800, height: 400, url: `http://127.0.0.1:${srv.port}/` });
+      const { renderObservation } = await import("../flamingo.ts");
+      const text = renderObservation(await e.observe());
+      expect(text).toContain("native-picker:do-not-click");
+      expect(text).toContain("leaves-page");
+    } finally {
+      srv.stop(true);
+    }
+  }, 60_000);
+});
+
+describe("init keeps generated output out of the repo", () => {
+  test("adds .flamingo/ to an existing .gitignore, once", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "flamingo-gi-"));
+    try {
+      writeFileSync(join(dir, ".gitignore"), "node_modules/\n");
+      const run = () => Bun.spawn(["bun", "run", "flamingo.ts", "init", "--dir", dir], { stdout: "pipe", stderr: "pipe" }).exited;
+      await run();
+      const after = readFileSync(join(dir, ".gitignore"), "utf8");
+      expect(after).toContain("node_modules/");
+      expect(after).toContain(".flamingo/");
+
+      await run();
+      // a second run must not append it again
+      expect(readFileSync(join(dir, ".gitignore"), "utf8").match(/\.flamingo\//g)).toHaveLength(1);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }, 60_000);
+});

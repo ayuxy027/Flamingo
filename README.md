@@ -163,7 +163,7 @@ Compiles twice to the same output path and compares digests:
 
 ```
 REPRODUCIBLE — both builds are byte-identical
-  sha256  01066e1f3096a93c7195e20e05c499e2c936c171dccbf351cb542860f64ecef7
+  sha256  67eb7128c1ffe5be7b88a699f60c96dc22207e61985cc20ac03d6f4ccf051b48
 ```
 
 *(Hash is for the current committed source. Bun embeds the output filename in the executable, so the comparison must fix
@@ -424,6 +424,27 @@ The three CDP-dependent APIs throw an error naming the fix when called on
 `registeredNetworkRequests: null` rather than `0` on webkit, so a signal that was
 never measured is never mistaken for a measured zero.
 
+## Token cost
+
+An agent re-reads an observation every turn, so its size is multiplied by the
+length of the loop. Observations render as compact text by default:
+
+```
+http://localhost:3000 | "Demo" | 1280x800 | scroll 0/2148
+elements 6
+  (44,25)   a#navfeat      "Features"  pinned
+  (94,171)  button#cta     "Get Started"
+  (238,171) button#deadcta "Learn More"
+blocked 2 behind div#cookiewall
+error app boot: metrics endpoint unreachable
+changed true
+```
+
+Same information, 74% fewer tokens than the JSON form — a 30-step loop drops
+from **~10,900 tokens to ~2,900**. The JSON spends most of its bytes on field
+names, a `boundingBox` that duplicates the centre, and document coordinates the
+loop never reads. Pass `format: "json"` when you want the structured object.
+
 ## Speed
 
 Detection is signal-driven rather than timed: a click is watched for DOM
@@ -435,6 +456,7 @@ resolves the moment any of them fires.
 | `detectDeadClicks`, live control | 1005ms | **4ms** |
 | `crawl`, 40 controls | 28.5s | **6.0s** |
 | `auditResponsiveness`, 2 viewports | 762ms | **292ms** |
+| `observe()`, 3000-element page | — | **4ms** |
 | `getInteractiveTree`, 3000-element page | — | **115ms** |
 
 Proving a control is *dead* still costs the full window — absence cannot be
@@ -478,10 +500,25 @@ observed early — which is why `--dwell` exists.
   page. Focus landing on a *button*, though, proves nothing — buttons take focus
   on any click — so only fields count.
 
+## Resource use
+
+Audited with a leak harness rather than by inspection:
+
+- 200 observe+click cycles on one engine — heap flat at 1.0MB
+- 25 engine open/close cycles — zero heap growth, zero leaked browser processes
+- 8 view rebuilds through the navigation-timeout path — no growth, no leaked processes
+- 100 failing evaluates — the eval chain does not wedge
+- In-page `MutationObserver`s and listeners are torn down after every probe
+
+Console and network buffers are capped (500 by default, `bufferSize`), and the
+request-id map is pruned in lockstep with the buffer. Screenshots taken without
+an explicit `--out` accumulate under `.flamingo/`, which `init` adds to your
+`.gitignore`.
+
 ## Tests
 
 ```bash
-bun test          # 106 tests against a real browser and a real fixture server
+bun test          # 113 tests against a real browser and a real fixture server
 bun run typecheck
 ```
 

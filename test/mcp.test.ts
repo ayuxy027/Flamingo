@@ -52,7 +52,10 @@ test("tools/call drives a real browser end to end", async () => {
     { jsonrpc: "2.0", id: 3, method: "tools/call", params: { name: "getInteractiveTree", arguments: {} } },
   ]);
 
-  expect(JSON.parse(gotoRes.result.content[0].text).title).toBe("flamingo fixture");
+  // an acting tool returns its own JSON on the first line, then the observation
+  const [gotoLine, , ...observation] = (gotoRes.result.content[0].text as string).split("\n");
+  expect(JSON.parse(gotoLine!).title).toBe("flamingo fixture");
+  expect(observation.join("\n")).toContain("elements");
 
   const tree = JSON.parse(treeRes.result.content[0].text);
   expect(tree.interactiveElements.map((i: any) => i.ref)).toContain("button#live");
@@ -98,3 +101,23 @@ test("initialize carries operating instructions for clients that read them", asy
   expect(text).toContain("nativePicker");
   expect(text).toContain("waitFor");
 }, 30_000);
+
+test("observe returns compact text by default and JSON on request", async () => {
+  const [, , compact, structured] = await rpc([
+    { jsonrpc: "2.0", id: 1, method: "initialize", params: {} },
+    { jsonrpc: "2.0", id: 2, method: "tools/call", params: { name: "goto", arguments: { url } } },
+    { jsonrpc: "2.0", id: 3, method: "tools/call", params: { name: "observe", arguments: {} } },
+    { jsonrpc: "2.0", id: 4, method: "tools/call", params: { name: "observe", arguments: { format: "json" } } },
+  ]);
+
+  const compactText = compact.result.content[0].text as string;
+  expect(compactText).toContain("elements");
+  expect(compactText).toContain("button#live");
+  expect(() => JSON.parse(compactText)).toThrow(); // it is text, not JSON
+
+  const jsonText = structured.result.content[0].text as string;
+  const parsed = JSON.parse(jsonText);
+  expect(parsed.elements.length).toBeGreaterThan(0);
+  // the whole point: the default costs far fewer tokens
+  expect(compactText.length).toBeLessThan(jsonText.length * 0.6);
+}, 60_000);

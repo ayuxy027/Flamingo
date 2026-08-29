@@ -176,6 +176,7 @@ const interactiveTree = (max: number) => `(() => {
     contentLength: shown.length,
     frames,
     url: location.href,
+    title: document.title || "",
     scroll: { x: Math.round(scrollX), y: Math.round(scrollY), maxY: Math.max(0, Math.round(document.documentElement.scrollHeight - vh)) },
     viewport: { width: vw, height: vh },
   };
@@ -506,7 +507,7 @@ const installErrorForwarder = `(() => {
   addEventListener("unhandledrejection", (e) => {
     console.error("[unhandled rejection] " + fmt(e.reason).slice(0, 500));
   });
-  return true;
+  return { title: document.title || "", url: location.href };
 })()`;
 
 const stopReactionProbe = `(() => { if (window.__flamingoCleanup) window.__flamingoCleanup(); return true; })()`;
@@ -602,6 +603,8 @@ export interface InteractiveTree {
   contentLength: number;
   frames: Array<{ ref: string | null; src: string | null }>;
   url: string;
+  /** Read from the document: WebView.title is set asynchronously and races. */
+  title: string;
   scroll: { x: number; y: number; maxY: number };
   viewport: { width: number; height: number };
 }
@@ -687,6 +690,50 @@ const SAMPLE_INPUT: Record<string, string> = {
   time: "12:30",
   text: "flamingo test",
 };
+
+/**
+ * Render an observation as compact text.
+ *
+ * An agent loop re-reads this every turn, so its size is multiplied by the number
+ * of steps. The JSON form spends most of its bytes on field names, a boundingBox
+ * that duplicates the centre, and document coordinates only `scrollScan` needs —
+ * none of which the loop reads. This keeps exactly what drives the next decision.
+ */
+export function renderObservation(o: Observation): string {
+  const lines: string[] = [];
+  const scroll = o.scroll.maxY > 0 ? ` | scroll ${o.scroll.y}/${o.scroll.maxY}${o.scroll.atBottom ? " (bottom)" : ""}` : "";
+  const title = o.title ? ` | "${o.title}"` : "";
+  lines.push(`${o.url}${title} | ${o.viewport.width}x${o.viewport.height}${scroll}`);
+
+  if (o.elements.length) {
+    const shown = o.elements.length + (o.elementsTruncated ? ` of ${o.elements.length + o.elementsTruncated}` : "");
+    lines.push(`elements ${shown}`);
+    const coordWidth = Math.max(...o.elements.map((e) => `(${e.center.x},${e.center.y})`.length));
+    const w = Math.max(...o.elements.map((e) => e.ref.length));
+    for (const e of o.elements) {
+      const flags = [
+        e.disabled ? "disabled" : "",
+        e.pinned ? "pinned" : "",
+        e.nativePicker ? "native-picker:do-not-click" : "",
+        e.leavesPage ? "leaves-page" : "",
+        e.inShadowDom ? "shadow" : "",
+      ].filter(Boolean).join(" ");
+      const text = e.text ? ` "${e.text}"` : "";
+      const at = `(${e.center.x},${e.center.y})`.padEnd(coordWidth);
+      lines.push(`  ${at} ${e.ref.padEnd(w)}${text}${flags ? "  " + flags : ""}`);
+    }
+  } else {
+    lines.push("elements none reachable");
+  }
+
+  for (const b of o.blockedBy) lines.push(`blocked ${b.count} behind ${b.ref}`);
+  if (o.frames) lines.push(`frames ${o.frames} (contents unreachable)`);
+  for (const e of o.newErrors) lines.push(`error ${e.split("\n")[0]!.slice(0, 160)}`);
+  for (const r of o.newFailedRequests) lines.push(`request-failed ${r.status ?? r.errorReason} ${r.url}`);
+  lines.push(`changed ${o.changed}${o.changed ? "" : "  (last action did nothing — try something else)"}`);
+  if (o.loading) lines.push("loading true");
+  return lines.join("\n");
+}
 
 /** A browser host that died underneath us, as opposed to a real usage error. */
 function isTransientHostFailure(e: unknown): boolean {
@@ -944,9 +991,16 @@ export class Engine {
   ): Promise<{ url: string; title: string; timedOut: boolean; recovered: boolean }> {
     const recovered = await this.healIfPoisoned();
     const { timedOut } = await this.navigationOp(() => this.view.navigate(url), timeoutMs);
-    // A navigation replaces the JS context, taking the error hook with it.
-    await this.evaluate(installErrorForwarder).catch(() => {});
-    return { url: this.view.url, title: this.view.title, timedOut, recovered };
+    // A navigation replaces the JS context, taking the error hook with it. The
+    // same round trip returns the title, because WebView.title is populated
+    // asynchronously by the host and is simply empty on a page that took a moment.
+    const page = await this.evaluate<{ title: string; url: string }>(installErrorForwarder).catch(() => null);
+    return {
+      url: page?.url ?? this.view.url,
+      title: page?.title ?? this.view.title,
+      timedOut,
+      recovered,
+    };
   }
 
   /**
@@ -969,8 +1023,8 @@ export class Engine {
   async reload({ timeoutMs = 30_000 } = {}): Promise<{ url: string; timedOut: boolean }> {
     await this.healIfPoisoned();
     const { timedOut } = await this.navigationOp(() => this.view.reload(), timeoutMs);
-    await this.evaluate(installErrorForwarder).catch(() => {});
-    return { url: this.view.url, timedOut };
+    const page = await this.evaluate<{ title: string; url: string }>(installErrorForwarder).catch(() => null);
+    return { url: page?.url ?? this.view.url, timedOut };
   }
 
   private async healIfPoisoned(): Promise<boolean> {
@@ -1143,7 +1197,7 @@ export class Engine {
 
     return {
       url: tree.url,
-      title: this.view.title,
+      title: tree.title,
       loading: this.view.loading,
       viewport: tree.viewport,
       scroll: { y: tree.scroll.y, maxY: tree.scroll.maxY, atBottom: tree.scroll.y >= tree.scroll.maxY },
@@ -2030,6 +2084,8 @@ interface Tool {
    * An agent loop otherwise spends half its calls asking "what happened?".
    */
   acts?: true;
+  /** Returns an observation that is rendered compactly unless format:"json". */
+  compactable?: true;
 }
 
 const TOOLS: Record<string, Tool> = {
@@ -2040,9 +2096,13 @@ const TOOLS: Record<string, Tool> = {
     run: (e, a) => e.goto(a.url),
   },
   observe: {
+    compactable: true,
     description:
       "One step of the agent loop: current url and title, the actionable elements with click-ready coordinates, what is covering anything unreachable, plus the console errors and failed requests SINCE THE LAST observe, and a `changed` flag that is false when nothing moved. Call this first, act, then read the observation returned by the action. `changed: false` after an action means the action achieved nothing — try something else rather than repeating it.",
-    inputSchema: { type: "object", properties: { maxElements: numSchema } },
+    inputSchema: {
+      type: "object",
+      properties: { maxElements: numSchema, format: { enum: ["compact", "json"] } },
+    },
     run: (e, a) => e.observe(a),
   },
   getInteractiveTree: {
@@ -2277,11 +2337,19 @@ async function handle(msg: any, getEngine: () => Promise<Engine>) {
         const result = await tool.run(engine, args);
         // An action's whole point is its effect, so hand back the resulting state
         // in the same round trip unless the caller explicitly opts out.
-        const payload =
-          tool.acts && args.observe !== false && result && typeof result === "object"
-            ? { ...(result as object), observation: await engine.observe() }
-            : result;
-        return send({ jsonrpc: "2.0", id, result: { content: [{ type: "text", text: JSON.stringify(payload) }] } });
+        const compact = args.format !== "json";
+        let text: string;
+        if (tool.compactable) {
+          text = compact ? renderObservation(result as Observation) : JSON.stringify(result);
+        } else if (tool.acts && args.observe !== false && result && typeof result === "object") {
+          const observation = await engine.observe();
+          text = compact
+            ? `${JSON.stringify(result)}\n\n${renderObservation(observation)}`
+            : JSON.stringify({ ...(result as object), observation });
+        } else {
+          text = JSON.stringify(result);
+        }
+        return send({ jsonrpc: "2.0", id, result: { content: [{ type: "text", text }] } });
       } catch (e: any) {
         // Tool failures are results, not protocol errors — the agent should see
         // the message (e.g. "requires backend: chrome") and adapt.
@@ -2371,8 +2439,15 @@ call \\\`observe\\\` after acting - only to start, or to re-orient.
 
 ### Reading an observation
 
-- \\\`elements\\\` - only what is genuinely clickable: on screen, visible, not covered.
-  Each has a \\\`center\\\` you pass straight to \\\`clickCoordinate\\\`.
+Observations are compact text, one element per line:
+
+    (94,171) button#cta "Get Started"
+
+Leading \\\`(x,y)\\\` are the click coordinates, then a reference, its label, then
+flags. Pass \\\`format: "json"\\\` if you want the structured object instead.
+
+- element lines - only what is genuinely clickable: on screen, visible, not covered.
+  Use the leading coordinates straight with \\\`clickCoordinate\\\`.
 - \\\`changed: false\\\` - your last action did nothing. **Do not repeat it.** Try a
   different element, scroll, or check \\\`blockedBy\\\`.
 - \\\`blockedBy\\\` - something is covering the page. A cookie wall or modal. Dismiss
@@ -2454,9 +2529,18 @@ Call \`observe\` to see where you are. Then act (clickCoordinate, typeInput, pre
 scroll) — every acting tool returns a fresh observation in its result, so you do not
 need to call observe again after acting.
 
+An acting tool's result is two parts: the action's own JSON on the first line, then a
+blank line, then the observation as text. Read the observation; the JSON line only
+matters when the action reports something specific such as timedOut.
+
+Observations come back as compact text, one element per line:
+  (94,171) button#cta "Get Started"
+That is: click coordinates, a reference, its label, then any flags. Pass
+format:"json" if you need the structured form.
+
 In an observation:
-- \`elements\` are the only genuinely clickable things: on screen, visible, not covered.
-  Use an element's \`center\` directly as click coordinates.
+- element lines are the only genuinely clickable things: on screen, visible, not
+  covered. Use the leading (x,y) directly as click coordinates.
 - \`changed: false\` means your last action did nothing. Do not repeat it — try a
   different element, scroll, or look at \`blockedBy\`.
 - \`blockedBy\` names what is covering the page (a cookie wall, a modal). Dismiss it
@@ -3130,6 +3214,19 @@ async function runInit(p: Parsed, json: boolean): Promise<number> {
       mkdirSync(skillDir, { recursive: true });
       writeFileSync(skillPath, SKILL_MD);
       actions.push({ path: skillPath, action: skillExisted ? "updated" : "created" });
+    }
+  }
+
+  // Screenshots and scratch output land in .flamingo/; keep them out of git
+  // rather than leaving the user to discover a pile of PNGs in their next diff.
+  const gitignore = join(root, ".gitignore");
+  if (existsSync(gitignore)) {
+    const current = readFileSync(gitignore, "utf8");
+    if (!/^\.flamingo\/?$/m.test(current)) {
+      writeFileSync(gitignore, current.replace(/\n*$/, "\n") + ".flamingo/\n");
+      actions.push({ path: gitignore, action: "updated", detail: "ignored .flamingo/" });
+    } else {
+      actions.push({ path: gitignore, action: "kept", detail: ".flamingo/ already ignored" });
     }
   }
 

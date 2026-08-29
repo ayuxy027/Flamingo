@@ -177,6 +177,10 @@ and `tsc` is invoked via `bunx` without being installed into the project.
 - **Bun 1.4.0 ships types that disagree with its runtime**: `bun.d.ts` declares
   `back()` and `forward()` on `WebView`, but the runtime only implements
   `goBack()` and `goForward()`. Calling the documented name throws.
+- **`WebView.title` is populated asynchronously by the host**, so it is empty on
+  any page that takes a moment to settle — and non-empty on a fast one, which is
+  worse, because it looks like it works. `document.title` is authoritative and
+  costs nothing extra when an evaluate is already being made.
 - **`goBack()` on the chrome backend never resolves once history runs out**, and
   the pending navigation it leaves behind poisons the view exactly like a hung
   `navigate()` does. Every navigation primitive here — `goto`, `goBack`,
