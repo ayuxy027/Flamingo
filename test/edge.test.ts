@@ -252,3 +252,58 @@ describe("content a page-level scroll never reveals", () => {
     }
   }, 60_000);
 });
+
+describe("waiting for things to happen", () => {
+  const APP = `<!doctype html><body style="margin:0">
+    <button id="go" style="width:120px;height:36px">Load</button>
+    <div id="spinner" style="display:none">Loading…</div>
+    <script>document.getElementById('go').onclick = () => {
+      const s = document.getElementById('spinner'); s.style.display = 'block';
+      setTimeout(() => { s.style.display = 'none';
+        const d = document.createElement('div'); d.id = 'done';
+        d.textContent = 'Saved successfully'; document.body.appendChild(d); }, 500);
+    };</script></body>`;
+
+  let srv: ReturnType<typeof Bun.serve>;
+  let u: string;
+  beforeAll(() => {
+    srv = Bun.serve({ port: 0, fetch: () => new Response(APP, { headers: { "content-type": "text/html" } }) });
+    u = `http://127.0.0.1:${srv.port}/`;
+  });
+  afterAll(() => srv.stop(true));
+
+  test("waits for an element to appear, then for it to go away", async () => {
+    using e = await Engine.open({ width: 600, height: 400, url: u });
+    await e.clickCoordinate({ x: 60, y: 18 });
+
+    const appeared = await e.waitFor({ selector: "#spinner", timeoutMs: 2000 });
+    expect(appeared.found).toBe(true);
+
+    const gone = await e.waitForGone({ selector: "#spinner", timeoutMs: 3000 });
+    expect(gone.gone).toBe(true);
+    // it really did have to wait for the async work, not just return immediately
+    expect(gone.waitedMs).toBeGreaterThan(200);
+  }, 60_000);
+
+  test("finds the tightest element containing the text, not an ancestor", async () => {
+    using e = await Engine.open({ width: 600, height: 400, url: u });
+    await e.clickCoordinate({ x: 60, y: 18 });
+    const done = await e.waitFor({ textContains: "Saved successfully", timeoutMs: 3000 });
+    expect(done.found).toBe(true);
+    // <body> and <html> also contain that text; the useful answer is the div
+    expect(done.element!.ref).toBe("div#done");
+  }, 60_000);
+
+  test("gives up on its deadline instead of waiting forever", async () => {
+    using e = await Engine.open({ width: 600, height: 400, url: u });
+    const started = Date.now();
+    const missing = await e.waitFor({ selector: "#never-exists", timeoutMs: 600 });
+    expect(missing.found).toBe(false);
+    expect(Date.now() - started).toBeLessThan(3000);
+  }, 60_000);
+
+  test("needs something to look for", async () => {
+    using e = await Engine.open({ width: 600, height: 400, url: u });
+    expect(e.waitFor({})).rejects.toThrow(/selector, textContains/);
+  }, 60_000);
+});

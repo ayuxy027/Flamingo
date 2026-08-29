@@ -295,6 +295,60 @@ const settleProbe = (maxMs: number) => `new Promise((resolve) => {
   requestAnimationFrame(tick);
 })`;
 
+/**
+ * First visible element matching a selector and/or containing some text,
+ * returned in the same shape as a tree entry so it is immediately clickable.
+ */
+const findElement = (selector: string | null, textContains: string | null) => `(() => {
+  ${DESCRIBE}
+  ${DEEP}
+  ${PINNED}
+  const sel = ${JSON.stringify(selector)};
+  const needle = ${JSON.stringify(textContains)} ? ${JSON.stringify(textContains)}.toLowerCase() : null;
+  const vw = innerWidth, vh = innerHeight;
+  const SKIP = { SCRIPT: 1, STYLE: 1, HEAD: 1, META: 1, LINK: 1, TITLE: 1, NOSCRIPT: 1 };
+
+  const visible = (el) => {
+    const r = el.getBoundingClientRect();
+    if (r.width < 1 || r.height < 1) return null;
+    const st = getComputedStyle(el);
+    if (st.visibility === "hidden" || st.display === "none" || st.opacity === "0") return null;
+    return r;
+  };
+
+  const matches = [];
+  for (const el of collectDeep(document, sel || "*", [])) {
+    if (SKIP[el.tagName]) continue;
+    if (needle) {
+      const t = el.innerText || el.value || el.getAttribute("aria-label") || el.getAttribute("placeholder") || "";
+      if (!String(t).toLowerCase().includes(needle)) continue;
+    }
+    if (!visible(el)) continue;
+    matches.push(el);
+    // A selector with no text filter is unambiguous; take the first hit.
+    if (!needle) break;
+  }
+  if (!matches.length) return null;
+
+  // Text matches every ancestor of the text too, so prefer the tightest element:
+  // the one that contains no other match.
+  const el = matches.find((m) => !matches.some((o) => o !== m && m.contains(o))) || matches[0];
+  const r = el.getBoundingClientRect();
+  const x = Math.round((Math.max(r.left, 0) + Math.min(r.right, vw)) / 2);
+  const y = Math.round((Math.max(r.top, 0) + Math.min(r.bottom, vh)) / 2);
+  return {
+    ref: describe(el),
+    tag: el.tagName.toLowerCase(),
+    text: String(el.innerText || el.value || "").trim().replace(/\\s+/g, " ").slice(0, 80),
+    center: { x, y },
+    documentX: Math.round(r.left + scrollX),
+    documentY: Math.round(r.top + scrollY),
+    boundingBox: { x: Math.round(r.left), y: Math.round(r.top), width: Math.round(r.width), height: Math.round(r.height) },
+    inViewport: r.bottom > 0 && r.right > 0 && r.top < vh && r.left < vw,
+    pinned: isPinned(el),
+  };
+})()`;
+
 /** Scroll geometry, read on its own because it is polled between scroll steps. */
 const scrollMetrics = `({
   scrollY: Math.round(scrollY),
@@ -927,6 +981,75 @@ export class Engine {
       await Bun.sleep(50);
     }
     return { idle: false };
+  }
+
+  /**
+   * Wait until something appears.
+   *
+   * The missing half of click-then-check: an agent that clicks "Save" needs to
+   * wait for the confirmation, and without this it can only sleep and hope.
+   * Polls at `pollMs` and returns as soon as the element exists and is visible,
+   * in the same shape as a tree entry so it can be clicked straight away.
+   */
+  async waitFor({
+    selector,
+    textContains,
+    timeoutMs = 5_000,
+    pollMs = 50,
+  }: {
+    selector?: string;
+    textContains?: string;
+    timeoutMs?: number;
+    pollMs?: number;
+  }): Promise<{ found: boolean; waitedMs: number; element: Record<string, unknown> | null }> {
+    if (!selector && !textContains) {
+      throw new Error("waitFor needs a selector, textContains, or both.");
+    }
+    const started = Date.now();
+    const deadline = started + timeoutMs;
+    const probe = findElement(selector ?? null, textContains ?? null);
+    for (;;) {
+      let hit: Record<string, unknown> | null = null;
+      try {
+        hit = await this.evaluate<Record<string, unknown> | null>(probe);
+      } catch {
+        // A navigation mid-wait destroys the context; keep waiting for the new one.
+      }
+      if (hit) return { found: true, waitedMs: Date.now() - started, element: hit };
+      if (Date.now() >= deadline) return { found: false, waitedMs: Date.now() - started, element: null };
+      await Bun.sleep(pollMs);
+    }
+  }
+
+  /** Wait until an element matching the criteria is gone (a spinner, a modal). */
+  async waitForGone({
+    selector,
+    textContains,
+    timeoutMs = 5_000,
+    pollMs = 50,
+  }: {
+    selector?: string;
+    textContains?: string;
+    timeoutMs?: number;
+    pollMs?: number;
+  }): Promise<{ gone: boolean; waitedMs: number }> {
+    if (!selector && !textContains) {
+      throw new Error("waitForGone needs a selector, textContains, or both.");
+    }
+    const started = Date.now();
+    const deadline = started + timeoutMs;
+    const probe = findElement(selector ?? null, textContains ?? null);
+    for (;;) {
+      let hit: unknown = null;
+      try {
+        hit = await this.evaluate(probe);
+      } catch {
+        hit = null;
+      }
+      if (!hit) return { gone: true, waitedMs: Date.now() - started };
+      if (Date.now() >= deadline) return { gone: false, waitedMs: Date.now() - started };
+      await Bun.sleep(pollMs);
+    }
   }
 
   // ------------------------------------------------- 4.1 visual and layout
@@ -1865,6 +1988,35 @@ const TOOLS: Record<string, Tool> = {
       "Click every actionable control on the page and report which ones do nothing, and why — swallowed by an overlay, or no handler fired at all. The fastest way to find broken buttons across a page.",
     inputSchema: { type: "object", properties: { max: numSchema, dwellMs: numSchema } },
     run: (e, a) => e.crawl(a),
+  },
+  waitFor: {
+    description:
+      "Wait until an element appears and is visible, by CSS selector and/or the text it contains. Returns it with click-ready coordinates. Use after clicking something to wait for the result instead of guessing at a sleep.",
+    inputSchema: {
+      type: "object",
+      properties: { selector: strSchema, textContains: strSchema, timeoutMs: numSchema },
+    },
+    run: (e, a) => e.waitFor(a),
+  },
+  waitForGone: {
+    description:
+      "Wait until an element matching a selector and/or text is gone — a loading spinner, a modal, a toast. Complements waitFor.",
+    inputSchema: {
+      type: "object",
+      properties: { selector: strSchema, textContains: strSchema, timeoutMs: numSchema },
+    },
+    run: (e, a) => e.waitForGone(a),
+  },
+  goBack: {
+    description:
+      "Go back in browser history. Runs under a deadline and reports timedOut rather than hanging, because back can fail to resolve when there is no history left.",
+    inputSchema: { type: "object", properties: { timeoutMs: numSchema } },
+    run: (e, a) => e.goBack(a),
+  },
+  reload: {
+    description: "Reload the current page, under a deadline.",
+    inputSchema: { type: "object", properties: { timeoutMs: numSchema } },
+    run: (e, a) => e.reload(a),
   },
   scrollScan: {
     description:

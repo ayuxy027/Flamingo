@@ -295,7 +295,10 @@ const report = await e.compileHealthReport();
 
 | Method | Notes |
 | :-- | :-- |
-| `goto(url)` / `waitForIdle()` | Navigate; network-quiet wait (chrome) |
+| `goto(url)` / `goBack()` / `reload()` | Navigate; each under a deadline |
+| `waitFor({ selector, textContains })` | Wait for something to appear, then click it |
+| `waitForGone({ selector })` | Wait for a spinner or modal to clear |
+| `waitForIdle()` | Network-quiet wait (chrome) |
 | `getInteractiveTree({ max })` | Actionable elements, centre coordinates, and what blocks the rest |
 | `detectPointerBlocker({ x, y })` | What blocks a click, and why |
 | `clickCoordinate({ x, y })` / `({ selector })` | Selector form waits for actionability |
@@ -316,6 +319,18 @@ const report = await e.compileHealthReport();
 | `compileHealthReport()` | Consolidated scorecard |
 
 `engine.view` exposes the underlying `Bun.WebView` for anything not wrapped here.
+
+`waitFor` is the other half of clicking. Instead of sleeping and hoping:
+
+```ts
+await e.clickCoordinate({ x: 140, y: 220 });
+await e.waitForGone({ selector: ".spinner" });
+const ok = await e.waitFor({ textContains: "Saved successfully" });
+// ok.element carries click-ready coordinates for whatever appeared
+```
+
+Text search returns the *tightest* element containing the text — `<body>`
+contains it too, but the useful answer is the `<div>` that holds it.
 
 ## MCP server
 
@@ -401,7 +416,7 @@ observed early — which is why `--dwell` exists.
 ## Tests
 
 ```bash
-bun test          # 93 tests against a real browser and a real fixture server
+bun test          # 99 tests against a real browser and a real fixture server
 bun run typecheck
 ```
 
