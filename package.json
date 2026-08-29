@@ -1,7 +1,7 @@
 {
   "name": "tryflamingo",
   "version": "0.1.0",
-  "description": "AI Native Frontend Testing Toolkit. A browser your agent drives in a loop. One file, zero dependencies, built on Bun.",
+  "description": "AI-native alternative to Playwright and Puppeteer. One file, zero dependencies, Bun.",
   "type": "module",
   "module": "flamingo.ts",
   "main": "flamingo.ts",
