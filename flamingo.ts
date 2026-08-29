@@ -17,8 +17,8 @@
  * @license MIT
  */
 
-import { existsSync, mkdirSync } from "node:fs";
-import { dirname, resolve } from "node:path";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { dirname, join, resolve } from "node:path";
 
 // =========================================================================
 // SECTION 1 — Programs that run inside the page
@@ -162,10 +162,18 @@ const interactiveTree = (max: number) => `(() => {
     .map(([ref, count]) => ({ ref, count }))
     .sort((a, b) => b.count - a.count)
     .slice(0, 5);
+  // A cheap fingerprint of visible text, so a change that touches no interactive
+  // element — a result message, a validation error — is still detected.
+  let contentHash = 0;
+  const body = document.body;
+  const shown = body ? String(body.innerText || "").slice(0, 20000) : "";
+  for (let i = 0; i < shown.length; i++) contentHash = (contentHash * 31 + shown.charCodeAt(i)) | 0;
   return {
     interactiveElements: out,
     truncated, occluded, offscreen, hidden,
     blockedBy,
+    contentHash,
+    contentLength: shown.length,
     frames,
     url: location.href,
     scroll: { x: Math.round(scrollX), y: Math.round(scrollY), maxY: Math.max(0, Math.round(document.documentElement.scrollHeight - vh)) },
@@ -589,10 +597,37 @@ export interface InteractiveTree {
   hidden: number;
   /** What is covering the occluded controls, commonest blocker first. */
   blockedBy: Array<{ ref: string; count: number }>;
+  /** Fingerprint of visible text, for detecting change that touches no control. */
+  contentHash: number;
+  contentLength: number;
   frames: Array<{ ref: string | null; src: string | null }>;
   url: string;
   scroll: { x: number; y: number; maxY: number };
   viewport: { width: number; height: number };
+}
+
+/**
+ * One step of an agent's feedback loop: where it is, what it can do next, and
+ * what changed since it last looked.
+ */
+export interface Observation {
+  url: string;
+  title: string;
+  loading: boolean;
+  viewport: { width: number; height: number };
+  scroll: { y: number; maxY: number; atBottom: boolean };
+  /** Actionable elements, already filtered to what is genuinely reachable. */
+  elements: InteractiveElement[];
+  elementsTruncated: number;
+  /** What is covering the unreachable controls, if anything. */
+  blockedBy: Array<{ ref: string; count: number }>;
+  frames: number;
+  /** Console errors since the previous observe() — the loop's failure signal. */
+  newErrors: string[];
+  /** Requests that failed since the previous observe(). Chrome backend only. */
+  newFailedRequests: Array<{ url: string; status?: number; errorReason?: string }>;
+  /** False when nothing at all changed since the previous observe(). */
+  changed: boolean;
 }
 
 export interface OverflowOffender {
@@ -687,6 +722,7 @@ export class Engine {
   private recycles = 0;
   private readonly evaluateTimeoutMs: number;
   private readonly onProgress: (stage: string, detail: string) => void;
+  private lastObservation: { consoleIndex: number; networkIndex: number; signature: string } | null = null;
 
   private constructor(opts: EngineOptions) {
     this.backend = opts.backend ?? "webkit";
@@ -1059,6 +1095,66 @@ export class Engine {
       if (Date.now() >= deadline) return { gone: false, waitedMs: Date.now() - started };
       await Bun.sleep(pollMs);
     }
+  }
+
+  /**
+   * A single step of the agent loop.
+   *
+   * An agent working towards a goal needs the same four things every turn: where
+   * it is, what it can act on, whether anything broke, and whether its last
+   * action did anything. Assembling that from five separate calls costs five
+   * round trips and leaves the agent to diff the results itself.
+   *
+   * `newErrors` and `changed` are deltas since the previous observe(), which is
+   * what lets a loop tell progress from a no-op without keeping its own state.
+   */
+  async observe({ maxElements = 40 }: { maxElements?: number } = {}): Promise<Observation> {
+    const tree = await this.getInteractiveTree({ max: maxElements });
+
+    const consoleIndex = this.consoleBuf.length;
+    const networkIndex = this.networkBuf.length;
+    const previous = this.lastObservation;
+
+    const newErrors = this.consoleBuf
+      .slice(previous?.consoleIndex ?? 0)
+      .filter((l) => l.type === "error")
+      .map((l) => l.text.slice(0, 300));
+
+    const newFailedRequests = this.networkBuf
+      .slice(previous?.networkIndex ?? 0)
+      .filter((n) => (n.status !== undefined && n.status >= 400) || n.errorText)
+      .map((n) => ({
+        url: n.url,
+        ...(n.status !== undefined ? { status: n.status } : {}),
+        ...(n.errorText ? { errorReason: n.errorText } : {}),
+      }));
+
+    // A cheap fingerprint of the observable state: if it is identical, the last
+    // action achieved nothing, which is exactly what a loop needs to know.
+    const signature = [
+      tree.url,
+      tree.scroll.y,
+      tree.contentHash,
+      tree.contentLength,
+      tree.interactiveElements.map((e) => `${e.ref}:${e.documentY}:${e.text}`).join("|"),
+    ].join("#");
+
+    this.lastObservation = { consoleIndex, networkIndex, signature };
+
+    return {
+      url: tree.url,
+      title: this.view.title,
+      loading: this.view.loading,
+      viewport: tree.viewport,
+      scroll: { y: tree.scroll.y, maxY: tree.scroll.maxY, atBottom: tree.scroll.y >= tree.scroll.maxY },
+      elements: tree.interactiveElements,
+      elementsTruncated: tree.truncated,
+      blockedBy: tree.blockedBy,
+      frames: tree.frames.length,
+      newErrors,
+      newFailedRequests,
+      changed: previous === null || previous.signature !== signature,
+    };
   }
 
   // ------------------------------------------------- 4.1 visual and layout
@@ -1929,13 +2025,25 @@ interface Tool {
   description: string;
   inputSchema: Record<string, unknown>;
   run: (e: Engine, a: any) => Promise<unknown>;
+  /**
+   * This tool changes the page, so its result carries a fresh observation.
+   * An agent loop otherwise spends half its calls asking "what happened?".
+   */
+  acts?: true;
 }
 
 const TOOLS: Record<string, Tool> = {
   goto: {
+    acts: true,
     description: "Navigate to a URL and wait for the main frame to finish loading.",
-    inputSchema: { type: "object", properties: { url: strSchema }, required: ["url"] },
+    inputSchema: { type: "object", properties: { observe: boolSchema, url: strSchema }, required: ["url"] },
     run: (e, a) => e.goto(a.url),
+  },
+  observe: {
+    description:
+      "One step of the agent loop: current url and title, the actionable elements with click-ready coordinates, what is covering anything unreachable, plus the console errors and failed requests SINCE THE LAST observe, and a `changed` flag that is false when nothing moved. Call this first, act, then read the observation returned by the action. `changed: false` after an action means the action achieved nothing — try something else rather than repeating it.",
+    inputSchema: { type: "object", properties: { maxElements: numSchema } },
+    run: (e, a) => e.observe(a),
   },
   getInteractiveTree: {
     description:
@@ -1950,46 +2058,52 @@ const TOOLS: Record<string, Tool> = {
     run: (e, a) => e.detectPointerBlocker(a),
   },
   clickCoordinate: {
+    acts: true,
     description:
       "Click. Give x/y for a raw coordinate click, or selector to wait for the element to become actionable first.",
     inputSchema: {
       type: "object",
-      properties: { x: numSchema, y: numSchema, selector: strSchema, button: { enum: ["left", "right", "middle"] }, clickCount: numSchema },
+      properties: { observe: boolSchema, x: numSchema, y: numSchema, selector: strSchema, button: { enum: ["left", "right", "middle"] }, clickCount: numSchema },
     },
     run: (e, a) => e.clickCoordinate(a),
   },
   typeInput: {
+    acts: true,
     description:
       "Type into the focused element. Default is a fast paste-style insert; set realKeys or typingDelayMs to send per-character key events for fields that validate on keydown.",
-    inputSchema: { type: "object", properties: { text: strSchema, typingDelayMs: numSchema, realKeys: boolSchema }, required: ["text"] },
+    inputSchema: { type: "object", properties: { observe: boolSchema, text: strSchema, typingDelayMs: numSchema, realKeys: boolSchema }, required: ["text"] },
     run: (e, a) => e.typeInput(a),
   },
   pressKey: {
+    acts: true,
     description: 'Press a named key ("Enter", "Tab", "Escape", arrows) or a chord with modifiers.',
     inputSchema: {
       type: "object",
-      properties: { key: strSchema, modifiers: { type: "array", items: { enum: ["Shift", "Control", "Alt", "Meta"] } } },
+      properties: { observe: boolSchema, key: strSchema, modifiers: { type: "array", items: { enum: ["Shift", "Control", "Alt", "Meta"] } } },
       required: ["key"],
     },
     run: (e, a) => e.pressKey(a),
   },
   hoverCoordinate: {
+    acts: true,
     description: "Hover to reveal popovers, dropdowns and hidden overlays." + CHROME_NOTE,
-    inputSchema: XY,
+    inputSchema: { type: "object", properties: { observe: boolSchema, x: numSchema, y: numSchema }, required: ["x", "y"] },
     run: (e, a) => e.hoverCoordinate(a),
   },
   scroll: {
+    acts: true,
     description: "Scroll by a pixel delta (dx/dy) or bring a selector into view.",
     inputSchema: {
       type: "object",
-      properties: { dx: numSchema, dy: numSchema, selector: strSchema, block: { enum: ["start", "center", "end", "nearest"] } },
+      properties: { observe: boolSchema, dx: numSchema, dy: numSchema, selector: strSchema, block: { enum: ["start", "center", "end", "nearest"] } },
     },
     run: (e, a) => e.scroll(a),
   },
   detectDeadClicks: {
+    acts: true,
     description:
       "Click a coordinate and report whether anything happened: DOM mutations, console output, navigation, and network requests. Use to prove a control is wired up.",
-    inputSchema: { type: "object", properties: { x: numSchema, y: numSchema, timeoutMs: numSchema }, required: ["x", "y"] },
+    inputSchema: { type: "object", properties: { observe: boolSchema, x: numSchema, y: numSchema, timeoutMs: numSchema }, required: ["x", "y"] },
     run: (e, a) => e.detectDeadClicks(a),
   },
   crawl: {
@@ -2017,14 +2131,16 @@ const TOOLS: Record<string, Tool> = {
     run: (e, a) => e.waitForGone(a),
   },
   goBack: {
+    acts: true,
     description:
       "Go back in browser history. Runs under a deadline and reports timedOut rather than hanging, because back can fail to resolve when there is no history left.",
-    inputSchema: { type: "object", properties: { timeoutMs: numSchema } },
+    inputSchema: { type: "object", properties: { observe: boolSchema, timeoutMs: numSchema } },
     run: (e, a) => e.goBack(a),
   },
   reload: {
+    acts: true,
     description: "Reload the current page, under a deadline.",
-    inputSchema: { type: "object", properties: { timeoutMs: numSchema } },
+    inputSchema: { type: "object", properties: { observe: boolSchema, timeoutMs: numSchema } },
     run: (e, a) => e.reload(a),
   },
   scrollScan: {
@@ -2130,7 +2246,8 @@ async function handle(msg: any, getEngine: () => Promise<Engine>) {
         result: {
           protocolVersion: params?.protocolVersion ?? "2024-11-05",
           capabilities: { tools: {} },
-          serverInfo: { name: "flamingo", version: "0.1.0" },
+          serverInfo: { name: "flamingo", version: VERSION },
+          instructions: MCP_INSTRUCTIONS,
         },
       });
     }
@@ -2155,8 +2272,16 @@ async function handle(msg: any, getEngine: () => Promise<Engine>) {
         return send({ jsonrpc: "2.0", id, error: { code: -32602, message: `Unknown tool: ${params?.name}` } });
       }
       try {
-        const result = await tool.run(await getEngine(), params.arguments ?? {});
-        return send({ jsonrpc: "2.0", id, result: { content: [{ type: "text", text: JSON.stringify(result) }] } });
+        const engine = await getEngine();
+        const args = params.arguments ?? {};
+        const result = await tool.run(engine, args);
+        // An action's whole point is its effect, so hand back the resulting state
+        // in the same round trip unless the caller explicitly opts out.
+        const payload =
+          tool.acts && args.observe !== false && result && typeof result === "object"
+            ? { ...(result as object), observation: await engine.observe() }
+            : result;
+        return send({ jsonrpc: "2.0", id, result: { content: [{ type: "text", text: JSON.stringify(payload) }] } });
       } catch (e: any) {
         // Tool failures are results, not protocol errors — the agent should see
         // the message (e.g. "requires backend: chrome") and adapt.
@@ -2218,6 +2343,139 @@ export async function runMcpServer(opts: EngineOptions = {}): Promise<void> {
 // Contract: stdout carries data, stderr carries diagnostics, and `--json` puts
 // nothing but a single JSON document on stdout so it can be piped safely.
 // ===========================================================================
+
+/**
+ * The agent-facing skill, written by `flamingo init`.
+ *
+ * Kept here rather than as a separate file so the project stays one source file
+ * and the skill can never drift from the tool surface it documents.
+ */
+const SKILL_MD = `---
+name: flamingo
+description: Drive and test a running web frontend through a real browser. Use when asked to test, QA, debug, explore or interact with a web app - to find dead buttons, broken assets, layout breaks, console errors, or to verify a UI flow actually works end to end.
+---
+
+# flamingo
+
+A browser you can drive in a loop. Every action returns the resulting page state,
+so you act, look at what changed, and act again until the goal is met.
+
+## The loop
+
+1. \\\`observe\\\` - where you are, what you can click, what changed since last time.
+2. Act (\\\`clickCoordinate\\\`, \\\`typeInput\\\`, \\\`pressKey\\\`, \\\`scroll\\\`).
+3. Read the \\\`observation\\\` that comes back with the action. Repeat.
+
+Every acting tool returns a fresh observation automatically. You do not need to
+call \\\`observe\\\` after acting - only to start, or to re-orient.
+
+### Reading an observation
+
+- \\\`elements\\\` - only what is genuinely clickable: on screen, visible, not covered.
+  Each has a \\\`center\\\` you pass straight to \\\`clickCoordinate\\\`.
+- \\\`changed: false\\\` - your last action did nothing. **Do not repeat it.** Try a
+  different element, scroll, or check \\\`blockedBy\\\`.
+- \\\`blockedBy\\\` - something is covering the page. A cookie wall or modal. Dismiss
+  it first; the controls behind it are unreachable until you do.
+- \\\`newErrors\\\` - console errors since your last look, including uncaught
+  exceptions and unhandled rejections. This is your failure signal.
+- \\\`scroll.atBottom\\\` - false means there is more page below.
+
+## Coordinates
+
+All coordinates are CSS pixels in the current viewport, taken from \\\`observe\\\`.
+Screenshots are 2x on retina - never read coordinates off an image; use
+\\\`observe\\\`. Coordinates go stale after anything changes the page, so use the ones
+from the most recent observation.
+
+## Waiting
+
+After an action that starts async work, do not sleep:
+
+- \\\`waitFor({ textContains: "Saved" })\\\` - wait for something to appear.
+- \\\`waitForGone({ selector: ".spinner" })\\\` - wait for something to clear.
+
+Both return on their deadline rather than hanging.
+
+## Beyond one screen
+
+\\\`observe\\\` reports the current viewport only. For the whole page:
+
+- \\\`scrollScan\\\` - map the entire page: every control in document coordinates, the
+  heading outline, pinned headers, whether it lazy-loads, and containers that
+  scroll separately.
+- \\\`scroll({ dy })\\\` to move, or \\\`scroll({ selector })\\\` to bring something into view.
+
+## Checking a page rather than driving it
+
+- \\\`compileHealthReport\\\` - console errors, broken assets, layout overflow, in one go.
+- \\\`crawl\\\` - click every control in view, report which do nothing and why.
+- \\\`interact\\\` - the whole page: clicks controls and types into fields to check
+  they accept input.
+- \\\`stressTest\\\` - rapid clicks, reload mid-action, navigate away mid-action. Finds
+  race conditions and unhandled rejections a single click never will.
+- \\\`auditResponsiveness\\\` - horizontal overflow across viewports.
+
+## Things that will trip you up
+
+- A \\\`<select>\\\` is marked \\\`nativePicker\\\` and must never be clicked - the native
+  popup blocks the browser. Read its options from \\\`interact\\\` instead.
+- Elements marked \\\`leavesPage\\\` navigate away. Clicking one abandons the page you
+  were testing.
+- Controls with destructive labels (delete, log out, revoke) are skipped by the
+  sweep tools by default, and \\\`confirm()\\\` is always answered "no". If you need a
+  destructive action, click it deliberately by coordinate.
+- \\\`interceptTraffic\\\` and \\\`hoverCoordinate\\\` need the chrome backend. On the
+  default webkit backend they return a clear error naming the fix.
+
+## Worked example
+
+Goal: confirm the signup form rejects a bad email.
+
+1. \\\`goto\\\` the page. The observation shows \\\`blockedBy: [{ref: "div#cookiewall"}]\\\`.
+2. Click the one reachable control (Accept). \\\`changed: true\\\`, more elements appear.
+3. \\\`clickCoordinate\\\` the email field, \\\`typeInput\\\` "not-an-email".
+4. Click Submit. Read \\\`newErrors\\\` and \\\`changed\\\`.
+5. \\\`waitFor({ textContains: "valid email" })\\\` to confirm the validation message.
+
+If step 4 returns \\\`changed: false\\\` and no error, the button is not wired -
+confirm with \\\`detectDeadClicks\\\` at the same coordinates.
+`;
+
+const MCP_SERVER_KEY = "flamingo";
+
+/**
+ * Sent in the initialize response, so every MCP client gets the operating
+ * instructions — not only the ones that also read a skill file.
+ */
+const MCP_INSTRUCTIONS = `flamingo drives a real browser in a loop: observe, act, observe.
+
+Call \`observe\` to see where you are. Then act (clickCoordinate, typeInput, pressKey,
+scroll) — every acting tool returns a fresh observation in its result, so you do not
+need to call observe again after acting.
+
+In an observation:
+- \`elements\` are the only genuinely clickable things: on screen, visible, not covered.
+  Use an element's \`center\` directly as click coordinates.
+- \`changed: false\` means your last action did nothing. Do not repeat it — try a
+  different element, scroll, or look at \`blockedBy\`.
+- \`blockedBy\` names what is covering the page (a cookie wall, a modal). Dismiss it
+  first; anything behind it is unreachable.
+- \`newErrors\` are console errors and uncaught exceptions since your last look.
+
+Coordinates are CSS pixels from the latest observation. Never read coordinates off a
+screenshot — those are device pixels, 2x on retina.
+
+After starting async work use \`waitFor\` / \`waitForGone\` rather than sleeping.
+\`observe\` covers the current viewport only; \`scrollScan\` maps the whole page.
+
+Never click an element marked \`nativePicker\` (a <select>) — the native popup blocks
+the browser. Elements marked \`leavesPage\` navigate away from the page under test.
+Destructive-looking controls are skipped by the sweep tools and confirm() is answered
+"no"; click one deliberately by coordinate if you really mean to.
+
+To check a page rather than drive it: compileHealthReport, crawl, interact,
+stressTest, auditResponsiveness.`;
 
 const VERSION = "0.1.0";
 const TAGLINE = "AI Native Frontend Testing Toolkit";
@@ -2366,6 +2624,18 @@ const COMMANDS: Record<string, CommandSpec> = {
     exits: "0 when the client closes stdin",
     examples: ["flamingo serve", "flamingo serve --backend chrome"],
   },
+  init: {
+    args: "",
+    summary: "Wire flamingo into this project for an AI agent",
+    detail:
+      "Writes an MCP server entry to .mcp.json so an agent can drive the browser, and\n" +
+      "a skill to .claude/skills/flamingo/SKILL.md so it knows how to use it. Merges\n" +
+      "into existing config rather than overwriting, and never replaces an existing\n" +
+      "flamingo entry without --force.",
+    flags: ["--dir <path>", "--backend <name>", "--skill-only", "--mcp-only", "--force", "--json"],
+    exits: "0 on success",
+    examples: ["flamingo init", "flamingo init --backend chrome", "flamingo init --dir ../my-app"],
+  },
   doctor: {
     args: "",
     summary: "Check the environment and report what works here",
@@ -2460,6 +2730,10 @@ const LOCAL_FLAG_HELP: Record<string, string> = {
   "--no-fill": "Click fields instead of typing into them",
   "--include-destructive": "Also test controls whose label reads destructive",
   "--targets": "How many live controls to run stress scenarios against (default 5)",
+  "--dir": "Project directory to write into (default: here)",
+  "--skill-only": "Write only the agent skill, not the MCP config",
+  "--mcp-only": "Write only the MCP config, not the agent skill",
+  "--force": "Overwrite existing flamingo entries",
   "--out": "Output path for the image",
   "--format": "png (default) | jpeg | webp (webp needs --backend chrome)",
   "--json": "Emit a single JSON document on stdout, nothing else",
@@ -2800,6 +3074,82 @@ function schemaDoc() {
   };
 }
 
+/**
+ * Wire flamingo into a project: an MCP server entry so an agent can drive the
+ * browser, and a skill so it knows how.
+ *
+ * Merges rather than overwrites, and never touches an existing flamingo entry
+ * without `--force`, because clobbering someone's `.mcp.json` is exactly the
+ * kind of thing a setup command must not do.
+ */
+async function runInit(p: Parsed, json: boolean): Promise<number> {
+  const root = resolve(str(p.flags, "dir") ?? ".");
+  const force = p.flags.has("force");
+  const wantSkill = !p.flags.has("mcp-only");
+  const wantMcp = !p.flags.has("skill-only");
+  const actions: Array<{ path: string; action: string; detail?: string }> = [];
+
+  // Prefer the installed binary; fall back to this file's absolute path when
+  // running from a clone, so the generated config actually works either way.
+  const selfPath = Bun.main;
+  const installed = selfPath.includes("node_modules");
+  const command = installed ? "bunx" : "bun";
+  const args = installed ? ["flamingo", "serve"] : ["run", selfPath, "serve"];
+  const backend = str(p.flags, "backend");
+  if (backend) args.push("--backend", backend);
+
+  if (wantMcp) {
+    const mcpPath = join(root, ".mcp.json");
+    let config: Record<string, any> = {};
+    let existed = false;
+    if (existsSync(mcpPath)) {
+      existed = true;
+      try {
+        config = JSON.parse(readFileSync(mcpPath, "utf8"));
+      } catch {
+        throw new UsageError(`${mcpPath} exists but is not valid JSON. Fix or move it, then re-run.`);
+      }
+    }
+    config.mcpServers ??= {};
+    if (config.mcpServers[MCP_SERVER_KEY] && !force) {
+      actions.push({ path: mcpPath, action: "kept", detail: "already configured — pass --force to overwrite" });
+    } else {
+      config.mcpServers[MCP_SERVER_KEY] = { command, args };
+      writeFileSync(mcpPath, JSON.stringify(config, null, 2) + "\n");
+      actions.push({ path: mcpPath, action: existed ? "updated" : "created", detail: `${command} ${args.join(" ")}` });
+    }
+  }
+
+  if (wantSkill) {
+    const skillDir = join(root, ".claude", "skills", "flamingo");
+    const skillPath = join(skillDir, "SKILL.md");
+    const skillExisted = existsSync(skillPath);
+    if (skillExisted && !force) {
+      actions.push({ path: skillPath, action: "kept", detail: "already present — pass --force to overwrite" });
+    } else {
+      mkdirSync(skillDir, { recursive: true });
+      writeFileSync(skillPath, SKILL_MD);
+      actions.push({ path: skillPath, action: skillExisted ? "updated" : "created" });
+    }
+  }
+
+  if (json) {
+    console.log(JSON.stringify({ root, actions }));
+    return EXIT.ok;
+  }
+
+  console.log(`${bold("flamingo")} ${dim(VERSION)} — wired into ${bold(root)}\n`);
+  for (const a of actions) {
+    const mark = a.action === "kept" ? dim("·") : green("✓");
+    console.log(`  ${mark} ${a.action.padEnd(8)} ${a.path.replace(root + "/", "")}${a.detail ? dim(`  ${a.detail}`) : ""}`);
+  }
+  console.log(`\n  ${bold("next")}`);
+  console.log(`    ${dim("1.")} flamingo doctor            ${dim("check this machine can run it")}`);
+  console.log(`    ${dim("2.")} restart your agent          ${dim("so it picks up .mcp.json")}`);
+  console.log(`    ${dim("3.")} ask it to test your app     ${dim('e.g. "check localhost:3000 for dead buttons"')}\n`);
+  return EXIT.ok;
+}
+
 // ------------------------------------------------------------------ commands
 
 async function runCli(argv: string[]): Promise<number> {
@@ -2837,6 +3187,7 @@ async function runCli(argv: string[]): Promise<number> {
     profileDirectory: str(p.flags, "profile"),
   };
 
+  if (p.command === "init") return runInit(p, json);
   if (p.command === "doctor") return runDoctor(json);
 
   if (p.command === "serve") {

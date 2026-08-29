@@ -1,6 +1,7 @@
 # STDLIB.md — packages replaced with the standard library
 
 **Track A — Developer Tools & CLI.** Runtime: Bun ≥ 1.4.
+**Shipped as:** a library, a CLI, and an MCP server for AI agents — one source file.
 **Runtime dependency count: 0.** `dependencies`, `peerDependencies`,
 `optionalDependencies` and `bundledDependencies` are all empty.
 

@@ -2,12 +2,23 @@
 
 ### AI Native Frontend Testing Toolkit
 
-**One file. Zero dependencies. Built on Bun.**
+**A browser your agent drives in a loop. One file. Zero dependencies. Built on Bun.**
 
 An AI agent looking at your frontend is effectively blind. Playwright hands it a
-DOM dump it burns thousands of tokens failing to parse. flamingo hands it a short
-list of what is actually visible and clickable — and, like the bird it is named
-after, filters the few things that matter out of a whole lake of mud.
+DOM dump it burns thousands of tokens failing to parse, then leaves it guessing
+whether its last click did anything.
+
+flamingo gives it a loop instead: **observe → act → observe**, where every action
+returns the resulting page state, and every observation says what changed since
+the last one. The agent keeps going until the goal is met, or until the state
+stops changing and it knows to try something else.
+
+```
+observe   → 1 actionable control, 6 blocked behind div#cookiewall
+click     → changed: true, 7 controls now reachable
+click     → changed: true, "Task complete" appeared
+click     → changed: false     ← that action did nothing; try something else
+```
 
 Built for **Zero Dependency 2026**, **Track A — Developer Tools & CLI**.
 Runtime: Bun ≥ 1.4. Runtime dependencies: **none**.
@@ -51,6 +62,23 @@ http://localhost:3000  webkit backend
 ---
 
 ## Install
+
+```bash
+npx flamingo init      # or: bunx flamingo init
+```
+
+That writes two things into your project and nothing else:
+
+- **`.mcp.json`** — an MCP server entry, so your agent can drive the browser.
+  Merged into whatever is already there; an existing `flamingo` entry is never
+  replaced without `--force`.
+- **`.claude/skills/flamingo/SKILL.md`** — a skill teaching the agent the loop,
+  the coordinate rules, and the traps (never click a `<select>`, `changed: false`
+  means try something else).
+
+Restart your agent and ask it to *"check localhost:3000 for dead buttons"*.
+
+For library or CLI use:
 
 ```bash
 bun add @ayuxy027/flamingo
@@ -135,7 +163,7 @@ Compiles twice to the same output path and compares digests:
 
 ```
 REPRODUCIBLE — both builds are byte-identical
-  sha256  fc5545d80686ed04338b64273633c45d09f9db95ca50bf97a38f43d24b7c3318
+  sha256  01066e1f3096a93c7195e20e05c499e2c936c171dccbf351cb542860f64ecef7
 ```
 
 *(Hash is for the current committed source. Bun embeds the output filename in the executable, so the comparison must fix
@@ -199,6 +227,7 @@ flamingo <command> [url] [options]
   shot <url>          Screenshot the viewport to a file
   serve               Run the MCP server on stdio
   doctor              Check the environment and report what works here
+  init                Wire flamingo into this project for an AI agent
   schema              Print the machine-readable API description as JSON
 ```
 
@@ -288,10 +317,33 @@ flamingo audit "$STAGING_URL" --json > report.json || echo "frontend regressions
 progress lines, no ANSI. Diagnostics always go to stderr. Colour switches off
 automatically when stdout is not a TTY or `NO_COLOR` is set.
 
+## The loop, from code
+
+```ts
+import { Engine } from "@ayuxy027/flamingo";
+
+await using e = await Engine.open({ url: "http://localhost:3000" });
+
+let step = await e.observe();
+while (!done(step)) {
+  const target = step.elements.find((el) => el.text === "Continue");
+  if (!target) break;
+  await e.clickCoordinate(target.center);
+  step = await e.observe();
+  if (!step.changed) break;          // that click achieved nothing
+  if (step.newErrors.length) break;  // it broke something
+}
+```
+
+`observe()` returns only what is genuinely reachable — on screen, visible, not
+covered — with click-ready coordinates, plus `changed`, `newErrors` and
+`newFailedRequests` as deltas since the previous call. Roughly 4ms on a
+3000-element page.
+
 ## Library
 
 ```ts
-import { Engine } from "./flamingo.ts";
+import { Engine } from "@ayuxy027/flamingo";
 
 await using e = await Engine.open({ url: "http://localhost:3000" });
 
@@ -307,6 +359,7 @@ const report = await e.compileHealthReport();
 
 | Method | Notes |
 | :-- | :-- |
+| `observe({ maxElements })` | One loop step: state, reachable controls, deltas |
 | `goto(url)` / `goBack()` / `reload()` | Navigate; each under a deadline |
 | `waitFor({ selector, textContains })` | Wait for something to appear, then click it |
 | `waitForGone({ selector })` | Wait for a spinner or modal to clear |
@@ -428,7 +481,7 @@ observed early — which is why `--dwell` exists.
 ## Tests
 
 ```bash
-bun test          # 98 tests against a real browser and a real fixture server
+bun test          # 106 tests against a real browser and a real fixture server
 bun run typecheck
 ```
 

@@ -87,3 +87,14 @@ test("notifications get no response", async () => {
   expect(out).toHaveLength(1);
   expect(out[0].id).toBe(1);
 }, 30_000);
+
+test("initialize carries operating instructions for clients that read them", async () => {
+  const [init] = await rpc([{ jsonrpc: "2.0", id: 1, method: "initialize", params: {} }]);
+  const text = init.result.instructions as string;
+  expect(text.length).toBeGreaterThan(300);
+  // the parts an agent gets wrong without being told
+  expect(text).toContain("changed: false");
+  expect(text).toContain("blockedBy");
+  expect(text).toContain("nativePicker");
+  expect(text).toContain("waitFor");
+}, 30_000);
