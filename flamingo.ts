@@ -52,7 +52,7 @@ const interactiveTree = (max: number) => `(() => {
   ${PINNED}
   const SEL = ${SELECTOR};
   const vw = innerWidth, vh = innerHeight;
-  const out = [], seen = new Set();
+  const out = [], occl = [], seen = new Set();
   const blockers = new Map();
   let occluded = 0, offscreen = 0, truncated = 0, hidden = 0;
   for (const el of collectDeep(document, SEL, [])) {
@@ -67,8 +67,19 @@ const interactiveTree = (max: number) => `(() => {
     const reachable = hit && (el === hit || el.contains(hit) || (el.shadowRoot && el.shadowRoot.contains(hit)));
     if (!reachable) {
       occluded++;
-      const by = hit.tagName === "BODY" || hit.tagName === "HTML" ? null : describe(hit);
-      if (by) blockers.set(by, (blockers.get(by) || 0) + 1);
+      const by = !hit || hit.tagName === "BODY" || hit.tagName === "HTML" ? null : describe(hit);
+      if (by) {
+        blockers.set(by, (blockers.get(by) || 0) + 1);
+        if (occl.length < ${max}) occl.push({
+          ref: describe(el),
+          tag: el.tagName.toLowerCase(),
+          text: (el.innerText || el.value || el.getAttribute("aria-label") || "").trim().replace(/\\s+/g, " ").slice(0, 80),
+          center: { x, y },
+          documentX: Math.round(r.left + scrollX),
+          documentY: Math.round(r.top + scrollY),
+          blockedBy: by,
+        });
+      }
       continue;
     }
     const key = x + ":" + y;
@@ -113,6 +124,7 @@ const interactiveTree = (max: number) => `(() => {
   for (let i = 0; i < shown.length; i++) contentHash = (contentHash * 31 + shown.charCodeAt(i)) | 0;
   return {
     interactiveElements: out,
+    occludedElements: occl,
     truncated, occluded, offscreen, hidden,
     blockedBy,
     contentHash,
@@ -449,8 +461,19 @@ export interface InteractiveElement {
   nativePicker?: boolean;
 }
 
+export interface OccludedElement {
+  ref: string;
+  tag: string;
+  text: string;
+  center: { x: number; y: number };
+  documentX: number;
+  documentY: number;
+  blockedBy: string;
+}
+
 export interface InteractiveTree {
   interactiveElements: InteractiveElement[];
+  occludedElements: OccludedElement[];
   truncated: number;
   occluded: number;
   offscreen: number;
@@ -1258,10 +1281,27 @@ export class Engine {
       });
     }
 
+    let stillBlocked = 0;
+    for (const el of tree.occludedElements) {
+      const blocker = await this.detectPointerBlocker({ x: el.center.x, y: el.center.y });
+      if (!blocker.isBlocked || blocker.intendedElement !== el.ref) continue;
+      stillBlocked++;
+      dead.push({
+        ref: el.ref,
+        text: el.text,
+        center: el.center,
+        reason: "blocked",
+        blockedBy: blocker.blockingElement,
+        registeredDOMChanges: null,
+        registeredNetworkRequests: null,
+        registeredConsoleLogs: null,
+      });
+    }
+
     return {
       targetUrl,
-      controlsFound: tree.interactiveElements.length,
-      controlsTested: candidates.length,
+      controlsFound: tree.interactiveElements.length + stillBlocked,
+      controlsTested: candidates.length + stillBlocked,
       skipped,
       alive,
       dead,
@@ -1281,6 +1321,7 @@ export class Engine {
     await Bun.sleep(settleMs);
 
     const elements = new Map<string, InteractiveElement>();
+    const occludedElements = new Map<string, OccludedElement>();
     const outline: Array<Record<string, unknown>> = [];
     const outlineSeen = new Set<string>();
 
@@ -1305,6 +1346,10 @@ export class Engine {
         if (elements.has(key)) continue;
         if (elements.size >= maxElements) { truncated++; continue; }
         elements.set(key, el);
+      }
+
+      for (const el of tree.occludedElements) {
+        occludedElements.set(`${el.ref}@${el.documentX},${el.documentY}`, el);
       }
 
       for (const h of await this.evaluate<Array<Record<string, unknown>>>(outlineProbe)) {
@@ -1340,6 +1385,7 @@ export class Engine {
       elementCount: elements.size,
       truncated,
       elements: [...elements.values()],
+      occludedElements: [...occludedElements.values()],
     };
   }
 
@@ -1415,9 +1461,30 @@ export class Engine {
       if (this.view.url !== startUrl) await this.goto(startUrl);
     }
 
+    const alreadySeen = new Set([...results.map((r) => r.ref), ...skipped.map((s) => s.ref)]);
+    let stillBlocked = 0;
+    for (const el of map.occludedElements) {
+      if (alreadySeen.has(el.ref)) continue;
+      await this.scrollToY(Math.max(0, el.documentY - Math.round(map.viewportHeight / 2)));
+      await Bun.sleep(80);
+      const y = el.documentY - (await this.evaluate<number>("scrollY"));
+      const blocker = await this.detectPointerBlocker({ x: el.center.x, y: Math.round(y) });
+      if (!blocker.isBlocked || blocker.intendedElement !== el.ref) continue;
+      stillBlocked++;
+      tested++;
+      results.push({
+        ref: el.ref,
+        text: el.text,
+        kind: "control",
+        status: "dead",
+        reason: "blocked",
+        blockedBy: blocker.blockingElement,
+      });
+    }
+
     return {
       url: startUrl,
-      controlsFound: map.elementCount,
+      controlsFound: map.elementCount + stillBlocked,
       controlsTested: tested,
       alive: results.filter((r) => r.status === "alive").length,
       dead: results.filter((r) => r.status === "dead"),
@@ -1578,9 +1645,13 @@ export class Engine {
         .slice(before)
         .filter((l) => l.type === "error" && !baselineErrors.has(l.text));
       let responsive = false;
+      let unresponsiveReason: string | null = null;
       try {
         responsive = (await this.evaluate<number>("1")) === 1;
-      } catch {                    }
+        if (!responsive) unresponsiveReason = "evaluate returned an unexpected value";
+      } catch (e: any) {
+        unresponsiveReason = String(e?.message ?? e).slice(0, 160);
+      }
       scenarios.push({
         name,
         target: target.ref,
@@ -1588,6 +1659,7 @@ export class Engine {
         errorsTriggered: errors.length,
         errors: errors.map((l) => l.text).slice(0, 5),
         pageResponsive: responsive,
+        unresponsiveReason,
         threw,
       });
       await reset();
@@ -1635,7 +1707,7 @@ export class Engine {
     }
 
     const totalErrors = scenarios.reduce((n, sc) => n + ((sc.errorsTriggered as number) ?? 0), 0);
-    const notRun = scenarios.filter((sc) => sc.ran === false).length;
+    const notRun = scenarios.filter((sc) => sc.ran === false || sc.skipped).length;
     return {
       url: startUrl,
       targetsUsed: targets.map((t) => t.ref),
@@ -2572,13 +2644,15 @@ function printStressHuman(r: any) {
   if (r.scenariosFailedToRun) console.log(`  ${yellow(`${r.scenariosFailedToRun} scenario(s) could not run`)}`);
   console.log(dim(`  targets: ${r.targetsUsed.join(", ")}\n`));
   for (const s of r.scenarios) {
-    const bad = s.errorsTriggered > 0 || !s.pageResponsive;
-    const mark = s.ran === false ? yellow("–") : bad ? red("✗") : green("✓");
+    const bad = s.errorsTriggered > 0 || s.pageResponsive === false;
+    const mark = s.skipped ? dim("⊘") : s.ran === false ? yellow("–") : bad ? red("✗") : green("✓");
     console.log(`    ${mark} ${String(s.name).padEnd(24)} ${dim(String(s.target ?? ""))}${
+      s.skipped ? "  " + dim(`skipped: ${s.skipped}`) : ""
+    }${
       s.ran === false ? "  " + yellow("did not run: " + String(s.threw).slice(0, 60)) : ""
     }${
       s.errorsTriggered ? "  " + yellow(`${s.errorsTriggered} error${s.errorsTriggered === 1 ? "" : "s"}`) : ""
-    }${s.pageResponsive ? "" : "  " + red("page stopped responding")}`);
+    }${s.pageResponsive === false ? "  " + red(`page stopped responding${s.unresponsiveReason ? `: ${s.unresponsiveReason}` : ""}`) : ""}`);
     for (const e of (s.errors ?? []).slice(0, 3)) console.log(`        ${dim(e.slice(0, 100))}`);
   }
   console.log();
@@ -2597,6 +2671,10 @@ function printTreeHuman(r: any) {
   for (const el of r.interactiveElements) {
     const text = el.text ? ` ${JSON.stringify(el.text)}` : "";
     console.log(`  ${cyan(`(${el.center.x}, ${el.center.y})`)}  ${el.ref}${text}${el.disabled ? dim(" [disabled]") : ""}`);
+  }
+  for (const el of r.occludedElements ?? []) {
+    const text = el.text ? ` ${JSON.stringify(el.text)}` : "";
+    console.log(`  ${dim(`(${el.center.x}, ${el.center.y})`)}  ${el.ref}${text}  ${yellow(`unreachable, covered by ${el.blockedBy}`)}`);
   }
   console.log();
 }

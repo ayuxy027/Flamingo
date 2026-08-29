@@ -72,6 +72,7 @@ const step = await e.observe();
 | `EngineOptions` | Everything `Engine.open()` accepts. |
 | `ConsoleEntry` | A buffered console line: `type`, `text`, `timestamp`. |
 | `InteractiveElement` | One actionable element: `ref`, `text`, viewport-space `center`, document-space position, and flags such as `pinned`, `nativePicker` and `leavesPage`. |
+| `OccludedElement` |  |
 | `InteractiveTree` | What `getInteractiveTree()` returns: the elements, plus counts of what was excluded and `blockedBy`. |
 | `Observation` | One step of the agent loop, including the `changed`, `newErrors` and `newFailedRequests` deltas. |
 | `OverflowOffender` | An element sticking out past the viewport, with how far. |
