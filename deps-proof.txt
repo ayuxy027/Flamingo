@@ -1,0 +1,45 @@
+# Dependency proof for flamingo
+# Generated: 2026-08-28 19:29 UTC
+# Reproduce with: bun run proof
+
+$ cat package.json | jq '{dependencies, peerDependencies, optionalDependencies, devDependencies}'
+{
+  "dependencies": {},
+  "peerDependencies": null,
+  "optionalDependencies": null,
+  "devDependencies": {
+    "@types/bun": "^1.4.0"
+  }
+}
+
+$ bun run proof
+$ bun run scripts/dependency-proof.ts
+
+Manifest
+  ✓ dependencies: empty
+  ✓ peerDependencies: empty
+  ✓ optionalDependencies: empty
+  ✓ bundledDependencies: empty
+
+Dev-only dependencies (permitted, disclosed in STDLIB.md)
+  ✓ @types/bun: type declarations only, erased at runtime
+
+Imports in flamingo.ts
+  ✓ node:fs: standard library
+  ✓ node:path: standard library
+
+Shipped files
+  ✓ files: flamingo.ts, docs/api.md, docs/cli.md, docs/mcp-tools.md, docs/internals.md, skills, mcp, README.md, STDLIB.md, LICENSE
+  ✓ flamingo.ts exists
+  ✓ docs/api.md exists
+  ✓ docs/cli.md exists
+  ✓ docs/mcp-tools.md exists
+  ✓ docs/internals.md exists
+  ✓ skills exists
+  ✓ mcp exists
+  ✓ README.md exists
+  ✓ STDLIB.md exists
+  ✓ LICENSE exists
+
+ZERO THIRD-PARTY RUNTIME DEPENDENCIES: verified
+

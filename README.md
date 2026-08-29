@@ -135,10 +135,41 @@ On `webkit`, `detectDeadClicks` returns `registeredNetworkRequests: null`, which
 * `flamingo --help`, `flamingo schema`: everything machine-readable
 
 ```bash
-bun run build          # -> dist/flamingo (61MB standalone)
+bun run build          # -> dist/flamingo (64MB standalone)
 bun run proof          # zero-deps check
-bun test               # 122 tests, real browser
+bun test               # 129 tests, real browser
 ```
+
+## Zero Dependency 2026
+
+Track A, Developer Tools & CLI. Manifest, proof and substitutions:
+
+```bash
+bun run build          # one command -> dist/flamingo, a standalone binary
+bun run proof          # zero third-party runtime deps, verified
+bun run verify:build   # builds twice, compares sha256
+bun test               # 129 tests against a real browser
+```
+
+* **Manifest:** `dependencies`, `peerDependencies` and `optionalDependencies` are all empty.
+  The only dev entry is `@types/bun`, type declarations that are erased at runtime and
+  never reach the artifact. Disclosed in [`STDLIB.md`](./STDLIB.md).
+* **Proof:** [`deps-proof.txt`](./deps-proof.txt), the committed output of `bun run proof`.
+* **Substitutions:** [`STDLIB.md`](./STDLIB.md) documents 17 stdlib-for-package swaps.
+
+Bonus challenges attempted:
+
+| Bonus | Claim |
+| :-- | :-- |
+| Single File (+5) | The entire implementation is `flamingo.ts`: library, CLI and MCP server. No `src/` tree, no modules. Tests and docs sit alongside it. |
+| Reproducible Build (+5) | Two builds on the same toolchain are byte-identical. `sha256 18cde609a2b28c57b428a16cbc9b6b41b4c303c12b64364637275f9beb3e2e7f` for both. Re-verify with `bun run verify:build`. |
+| STDLIB Log (+3) | 17 substitutions in [`STDLIB.md`](./STDLIB.md), each with a rationale. |
+| Package Killer (+3) | `puppeteer` / `playwright` replaced by `Bun.WebView` + hand-written CDP, and `chalk` (319.8M weekly) replaced by a 12-line ANSI `paint()` that honours `NO_COLOR` and TTY detection. |
+
+Honest limits: the `webkit` backend cannot measure network status, so `detectDeadClicks`
+returns `registeredNetworkRequests: null` rather than `0`. Three CDP-dependent APIs throw
+on webkit with the fix named in the error. `http.server`-grade caveats do not apply here;
+there is no server in the shipped tool beyond the MCP stdio transport.
 
 ## License
 
