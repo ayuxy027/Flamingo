@@ -40,6 +40,21 @@ const step = await e.observe();
 | `waitForGone` | Wait until an element matching a selector and/or text is gone — a loading spinner, a modal, a toast. |
 | `waitForIdle` | Wait until no network request has started for a quiet window. |
 
+## `Engine.open(options)`
+
+| Option | Meaning |
+| :-- | :-- |
+| `backend` | `"webkit"` (default, macOS, needs no browser install) or `"chrome"`, required for network interception and hover. |
+| `chromePath` | Chrome/Chromium/Brave executable. Defaults to `BUN_CHROME_PATH`, then a probe of standard locations. |
+| `width` | Viewport width in CSS pixels, normalised across both backends. Default `1280`. |
+| `height` | Viewport height in CSS pixels, normalised across both backends. Default `800`. |
+| `url` | Navigate here during `open()`. |
+| `bufferSize` | Maximum buffered console and network entries, oldest dropped. Default `500`. |
+| `onProgress` | `(stage, detail) => void`, called as long sweeps advance. Used for progress output. |
+| `profileDirectory` | Persist cookies and storage here to stay logged in between runs. Ephemeral by default. |
+| `evaluateTimeoutMs` | How long an in-page evaluate may stall before the view is rebuilt. Default `10000`. |
+| `reducedMotion` | Collapse CSS animations and transitions to zero duration so geometry is deterministic. Default `true`. |
+
 ## Also exported
 
 | Export | Purpose |
@@ -48,3 +63,18 @@ const step = await e.observe();
 | `runMcpServer(opts)` | Serve the MCP protocol on stdin/stdout |
 | `schemaDoc()` | The machine-readable description of every command and tool |
 | `SKILL_MD`, `MCP_INSTRUCTIONS` | The agent-facing guidance, as written by `flamingo init` |
+
+
+## Exported types
+
+| Type | Meaning |
+| :-- | :-- |
+| `EngineOptions` | Everything `Engine.open()` accepts. |
+| `ConsoleEntry` | A buffered console line: `type`, `text`, `timestamp`. |
+| `InteractiveElement` | One actionable element: `ref`, `text`, viewport-space `center`, document-space position, and flags such as `pinned`, `nativePicker` and `leavesPage`. |
+| `InteractiveTree` | What `getInteractiveTree()` returns: the elements, plus counts of what was excluded and `blockedBy`. |
+| `Observation` | One step of the agent loop, including the `changed`, `newErrors` and `newFailedRequests` deltas. |
+| `OverflowOffender` | An element sticking out past the viewport, with how far. |
+| `ResponsiveViolation` | One viewport that overflowed, with its worst offenders. |
+| `NetworkEntry` | A buffered request: `url`, `method`, `status`, `errorText`. |
+| `Backend` | `"webkit"` or `"chrome"`. |

@@ -380,3 +380,82 @@ describe("navigations that race each other", () => {
     }
   }, 60_000);
 });
+
+describe("things only found by pointing it at a real, working site", () => {
+  const SITE = `<!doctype html><html><head><title>Site</title></head><body style="margin:0">
+    <header style="position:fixed;top:0;left:0;right:0;height:50px;background:#222">
+      <a href="#a" class="link" style="color:#fff">One</a>
+      <a href="#b" class="link" style="color:#fff">Two</a>
+      <a href="https://example.com/away" class="ghost" style="color:#fff">Away</a>
+    </header>
+    <main style="padding-top:60px">
+      <button id="ok" style="width:90px;height:32px">OK</button>
+      <div style="height:1200px"></div>
+      <footer><a href="/api">API</a> <a href="/guide">Guide</a></footer>
+    </main>
+    <script>document.getElementById('ok').onclick=()=>document.body.appendChild(document.createElement('i'));</script>
+    </body></html>`;
+
+  let srv: ReturnType<typeof Bun.serve>;
+  let u: string;
+  beforeAll(() => {
+    srv = Bun.serve({ port: 0, fetch: () => new Response(SITE, { headers: { "content-type": "text/html" } }) });
+    u = `http://127.0.0.1:${srv.port}/`;
+  });
+  afterAll(() => srv.stop(true));
+
+  test("elements with no id or class get a readable ref from their text", async () => {
+    using e = await Engine.open({ width: 900, height: 600, url: u });
+    const refs = (await e.scrollScan()).elements.map((x) => x.ref);
+    expect(refs).toContain("a:api");
+    expect(refs).toContain("a:guide");
+    expect(refs.filter((r) => r === "a")).toHaveLength(0);
+  }, 90_000);
+
+  test("stress never targets a link that navigates off the page", async () => {
+    using e = await Engine.open({ width: 900, height: 600, url: u });
+    const r = await e.stressTest({ maxTargets: 5, settleMs: 80 });
+    expect(r.targetsUsed).not.toContain("a.ghost");
+    for (const s of r.scenarios) expect(s.pageResponsive).toBe(true);
+    expect(e.view.url).toContain("127.0.0.1");
+  }, 300_000);
+
+  test("interact classifies off-page links without needing to locate them", async () => {
+    using e = await Engine.open({ width: 900, height: 600, url: u });
+    const r = await e.interact({ dwellMs: 250 });
+    const away = r.results.find((x: any) => x.ref === "a.ghost") as any;
+    expect(away.status).toBe("alive");
+    expect(away.reason).toBe("leaves-page");
+    expect(r.skipped.filter((s: any) => s.reason === "not-reachable-after-scroll")).toHaveLength(0);
+  }, 300_000);
+
+  test("pinned controls at the same height are told apart by their x position", async () => {
+    using e = await Engine.open({ width: 900, height: 600, url: u });
+    const pinned = (await e.scrollScan()).elements.filter((x) => x.pinned && x.ref === "a.link");
+    expect(pinned).toHaveLength(2);
+    expect(pinned[0]!.documentX).not.toBe(pinned[1]!.documentX);
+  }, 90_000);
+
+  test("animation is frozen so geometry does not shift mid-scan", async () => {
+    const moving = `<!doctype html><body style="margin:0">
+      <style>@keyframes drift{from{transform:translateY(0)}to{transform:translateY(300px)}}
+      #m{animation:drift 3s linear infinite}</style>
+      <button id="m" style="width:90px;height:32px">Drift</button></body>`;
+    const s2 = Bun.serve({ port: 0, fetch: () => new Response(moving, { headers: { "content-type": "text/html" } }) });
+    try {
+      using on = await Engine.open({ width: 600, height: 400, url: `http://127.0.0.1:${s2.port}/` });
+      const a = (await on.getInteractiveTree()).interactiveElements[0]!.documentY;
+      await Bun.sleep(400);
+      const b = (await on.getInteractiveTree()).interactiveElements[0]!.documentY;
+      expect(b).toBe(a);
+
+      using off = await Engine.open({ width: 600, height: 400, url: `http://127.0.0.1:${s2.port}/`, reducedMotion: false });
+      const c = (await off.getInteractiveTree()).interactiveElements[0]!.documentY;
+      await Bun.sleep(400);
+      const d = (await off.getInteractiveTree()).interactiveElements[0]!.documentY;
+      expect(d).not.toBe(c);
+    } finally {
+      s2.stop(true);
+    }
+  }, 90_000);
+});

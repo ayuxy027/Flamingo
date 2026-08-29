@@ -4,10 +4,12 @@ import { dirname, join, resolve } from "node:path";
 
 const DESCRIBE = `const describe = (el) => {
     if (!el) return null;
-    let s = el.tagName.toLowerCase();
-    if (el.id) s += "#" + el.id;
-    else if (el.classList && el.classList.length) s += "." + [...el.classList].slice(0, 2).join(".");
-    return s;
+    const tag = el.tagName.toLowerCase();
+    if (el.id) return tag + "#" + el.id;
+    if (el.classList && el.classList.length) return tag + "." + [...el.classList].slice(0, 2).join(".");
+    const label = (el.getAttribute && (el.getAttribute("aria-label") || el.getAttribute("name"))) || el.innerText || "";
+    const slug = String(label).trim().toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 24);
+    return slug ? tag + ":" + slug : tag;
   };`;
 
 const PINNED = `const isPinned = (el) => {
@@ -389,6 +391,15 @@ const installErrorForwarder = `(() => {
   return { title: document.title || "", url: location.href };
 })()`;
 
+const freezeMotion = `(() => {
+  if (document.getElementById("__flamingo_motion")) return true;
+  const style = document.createElement("style");
+  style.id = "__flamingo_motion";
+  style.textContent = "*,*::before,*::after{animation-duration:0s !important;animation-delay:0s !important;animation-iteration-count:1 !important;transition-duration:0s !important;transition-delay:0s !important;scroll-behavior:auto !important;}";
+  (document.head || document.documentElement).appendChild(style);
+  return true;
+})()`;
+
 const stopReactionProbe = `(() => { if (window.__flamingoCleanup) window.__flamingoCleanup(); return true; })()`;
 
 const viewportInfo = `({ width: innerWidth, height: innerHeight, deviceScaleFactor: devicePixelRatio, scrollX, scrollY })`;
@@ -412,6 +423,7 @@ export interface EngineOptions {
   onProgress?: (stage: string, detail: string) => void;
   profileDirectory?: string;
   evaluateTimeoutMs?: number;
+  reducedMotion?: boolean;
 }
 
 export interface ConsoleEntry {
@@ -589,6 +601,7 @@ export class Engine {
   private navigationPoisoned = false;
   private recycles = 0;
   private readonly evaluateTimeoutMs: number;
+  private readonly reducedMotion: boolean;
   private readonly onProgress: (stage: string, detail: string) => void;
   private lastObservation: { consoleIndex: number; networkIndex: number; signature: string } | null = null;
 
@@ -598,6 +611,7 @@ export class Engine {
     this.width = opts.width ?? 1280;
     this.height = opts.height ?? 800;
     this.evaluateTimeoutMs = opts.evaluateTimeoutMs ?? 10_000;
+    this.reducedMotion = opts.reducedMotion ?? true;
     this.onProgress = opts.onProgress ?? (() => {});
 
     let backend: Bun.WebView.Backend;
@@ -711,6 +725,7 @@ export class Engine {
       await this.view.cdp("Page.addScriptToEvaluateOnNewDocument", { source }).catch(() => {});
     }
     await this.evaluate(installErrorForwarder).catch(() => {});
+    if (this.reducedMotion) await this.evaluate(freezeMotion).catch(() => {});
   }
 
   private requireChrome(api: string): void {
@@ -766,6 +781,7 @@ export class Engine {
       ({ timedOut } = await this.navigationOp(() => this.view.navigate(url), timeoutMs));
     }
     const page = await this.evaluate<{ title: string; url: string }>(installErrorForwarder).catch(() => null);
+    if (this.reducedMotion) await this.evaluate(freezeMotion).catch(() => {});
     return {
       url: page?.url ?? this.view.url,
       title: page?.title ?? this.view.title,
@@ -1283,7 +1299,9 @@ export class Engine {
       const scrollY = tree.scroll.y;
 
       for (const el of tree.interactiveElements) {
-        const key = el.pinned ? `pinned:${el.ref}` : `${el.ref}@${el.documentY}`;
+        const key = el.pinned
+          ? `pinned:${el.ref}@${el.documentX},${el.center.y}`
+          : `${el.ref}@${el.documentX},${el.documentY}`;
         if (elements.has(key)) continue;
         if (elements.size >= maxElements) { truncated++; continue; }
         elements.set(key, el);
@@ -1347,7 +1365,9 @@ export class Engine {
 
     const seenRefs = new Set<string>();
     const queue = map.elements.filter((el) => {
-      const key = el.pinned ? `pinned:${el.ref}` : `${el.ref}@${el.documentY}`;
+      const key = el.pinned
+        ? `pinned:${el.ref}@${el.documentX},${el.center.y}`
+        : `${el.ref}@${el.documentX},${el.documentY}`;
       if (seenRefs.has(key)) return false;
       seenRefs.add(key);
       return true;
@@ -1366,6 +1386,19 @@ export class Engine {
       }
 
       this.onProgress("interact", target.ref);
+      if (target.leavesPage) {
+        tested++;
+        results.push({
+          ref: target.ref,
+          text: target.text,
+          kind: "link",
+          status: "alive",
+          reason: "leaves-page",
+          href: target.href,
+        });
+        continue;
+      }
+
       const live = await this.locate(target, map.viewportHeight);
       if (!live) { skipped.push({ ref: target.ref, reason: "not-reachable-after-scroll" }); continue; }
       if (!live.nativePicker && !(await this.stillThere(live.ref, live.center.x, live.center.y))) {
@@ -1408,10 +1441,10 @@ export class Engine {
     const tree = await this.getInteractiveTree({ max: 150 });
     const sameRef = tree.interactiveElements.filter((e) => e.ref === target.ref);
     if (!sameRef.length) return null;
-    return sameRef.length === 1
-      ? sameRef[0]!
-      : sameRef.reduce((best, e) =>
-          Math.abs(e.documentY - target.documentY) < Math.abs(best.documentY - target.documentY) ? e : best);
+    if (sameRef.length === 1) return sameRef[0]!;
+    const distance = (e: InteractiveElement) =>
+      Math.abs(e.documentX - target.documentX) + Math.abs(e.documentY - target.documentY);
+    return sameRef.reduce((best, e) => (distance(e) < distance(best) ? e : best));
   }
 
   private async settle(maxMs: number): Promise<void> {
@@ -1489,6 +1522,7 @@ export class Engine {
       (e) =>
         !e.disabled &&
         !e.nativePicker &&
+        !e.leavesPage &&
         !DESTRUCTIVE_LABEL.test(e.text ?? "") &&
         (e.tag === "button" || e.tag === "a" || e.type === "submit"),
     );

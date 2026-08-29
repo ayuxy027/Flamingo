@@ -30,6 +30,40 @@ describe("generated artifacts", () => {
     expect(cfg.mcpServers.flamingo.args).toContain("serve");
   });
 
+  test("every constructor option and exported type is documented", () => {
+    const source = readFileSync("flamingo.ts", "utf8");
+    const api = readFileSync("docs/api.md", "utf8");
+
+    const start = source.indexOf("export interface EngineOptions {");
+    const optionsBlock = source.slice(start, source.indexOf("\n}", start));
+    const options = [...optionsBlock.matchAll(/^\s{2}(\w+)\??:/gm)].map((m) => m[1]!);
+    expect(options.length).toBeGreaterThan(5);
+
+    const types = [
+      ...[...source.matchAll(/^export interface (\w+)/gm)].map((m) => m[1]!),
+      ...[...source.matchAll(/^export type (\w+)/gm)].map((m) => m[1]!),
+    ];
+
+    expect(options.filter((o) => !api.includes(`\`${o}\``))).toEqual([]);
+    expect(types.filter((t) => !api.includes(`\`${t}\``))).toEqual([]);
+  });
+
+  test("every public Engine method appears in the API docs", async () => {
+    const { Engine } = await import("../flamingo.ts");
+    const api = readFileSync("docs/api.md", "utf8");
+    const source = readFileSync("flamingo.ts", "utf8");
+    const privates = new Set(
+      [...source.matchAll(/\n\s+private\s+(?:readonly\s+|async\s+)*([a-zA-Z][a-zA-Z0-9]*)\s*[(<]/g)].map((m) => m[1]!),
+    );
+    const missing = Object.getOwnPropertyNames(Engine.prototype).filter((n) => {
+      if (n === "constructor" || privates.has(n)) return false;
+      const d = Object.getOwnPropertyDescriptor(Engine.prototype, n);
+      if (!d || typeof d.value !== "function") return false;
+      return !api.includes(`\`${n}\``);
+    });
+    expect(missing).toEqual([]);
+  });
+
   test("every documented file exists and is non-trivial", () => {
     for (const f of ["docs/api.md", "docs/cli.md", "docs/mcp-tools.md", "docs/internals.md"]) {
       expect(existsSync(f)).toBe(true);

@@ -84,6 +84,59 @@ for (const name of Object.getOwnPropertyNames(Engine.prototype).sort()) {
 
 if (missing.length) console.warn(`  ! no description for: ${missing.join(", ")}`);
 
+const OPTION_DOCS: Record<string, string> = {
+  backend: '`"webkit"` (default, macOS, needs no browser install) or `"chrome"`, required for network interception and hover.',
+  chromePath: "Chrome/Chromium/Brave executable. Defaults to `BUN_CHROME_PATH`, then a probe of standard locations.",
+  width: "Viewport width in CSS pixels, normalised across both backends. Default `1280`.",
+  height: "Viewport height in CSS pixels, normalised across both backends. Default `800`.",
+  url: "Navigate here during `open()`.",
+  bufferSize: "Maximum buffered console and network entries, oldest dropped. Default `500`.",
+  onProgress: "`(stage, detail) => void`, called as long sweeps advance. Used for progress output.",
+  profileDirectory: "Persist cookies and storage here to stay logged in between runs. Ephemeral by default.",
+  evaluateTimeoutMs: "How long an in-page evaluate may stall before the view is rebuilt. Default `10000`.",
+  reducedMotion: "Collapse CSS animations and transitions to zero duration so geometry is deterministic. Default `true`.",
+};
+
+const TYPE_DOCS: Record<string, string> = {
+  EngineOptions: "Everything `Engine.open()` accepts.",
+  Backend: '`"webkit"` or `"chrome"`.',
+  InteractiveElement: "One actionable element: `ref`, `text`, viewport-space `center`, document-space position, and flags such as `pinned`, `nativePicker` and `leavesPage`.",
+  InteractiveTree: "What `getInteractiveTree()` returns: the elements, plus counts of what was excluded and `blockedBy`.",
+  Observation: "One step of the agent loop, including the `changed`, `newErrors` and `newFailedRequests` deltas.",
+  ConsoleEntry: "A buffered console line: `type`, `text`, `timestamp`.",
+  NetworkEntry: "A buffered request: `url`, `method`, `status`, `errorText`.",
+  OverflowOffender: "An element sticking out past the viewport, with how far.",
+  ResponsiveViolation: "One viewport that overflowed, with its worst offenders.",
+};
+
+const optionNames = (() => {
+  const src = readFileSync(join(import.meta.dir, "..", "flamingo.ts"), "utf8");
+  const start = src.indexOf("export interface EngineOptions {");
+  const body = src.slice(start, src.indexOf("\n}", start));
+  return [...body.matchAll(/^\s{2}(\w+)\??:/gm)].map((m) => m[1]!);
+})();
+
+const exportedTypes = (() => {
+  const src = readFileSync(join(import.meta.dir, "..", "flamingo.ts"), "utf8");
+  return [
+    ...[...src.matchAll(/^export interface (\w+)/gm)].map((m) => m[1]!),
+    ...[...src.matchAll(/^export type (\w+)/gm)].map((m) => m[1]!),
+  ];
+})();
+
+const undocumentedOptions = optionNames.filter((n) => !OPTION_DOCS[n]);
+const undocumentedTypes = exportedTypes.filter((n) => !TYPE_DOCS[n]);
+if (undocumentedOptions.length) console.warn(`  ! undocumented options: ${undocumentedOptions.join(", ")}`);
+if (undocumentedTypes.length) console.warn(`  ! undocumented types: ${undocumentedTypes.join(", ")}`);
+
+const optionsTable =
+  `\n\n## \`Engine.open(options)\`\n\n| Option | Meaning |\n| :-- | :-- |\n` +
+  optionNames.map((n) => `| \`${n}\` | ${OPTION_DOCS[n] ?? ""} |`).join("\n");
+
+const typesTable =
+  `\n\n## Exported types\n\n| Type | Meaning |\n| :-- | :-- |\n` +
+  exportedTypes.map((n) => `| \`${n}\` | ${TYPE_DOCS[n] ?? ""} |`).join("\n");
+
 emit(
   "docs/api.md",
   GENERATED +
@@ -92,11 +145,13 @@ emit(
     `\n\n${documented.length} public methods on \`Engine\`. Full behaviour and options: [MCP tools](./mcp-tools.md), [internals](./internals.md).\n\n` +
     `| Method | What it does |\n| :-- | :-- |\n` +
     documented.map((m) => `| \`${m.name}\` | ${m.doc} |`).join("\n") +
+    optionsTable +
     `\n\n## Also exported\n\n| Export | Purpose |\n| :-- | :-- |\n` +
     `| \`renderObservation(o)\` | Compact text form of an observation, ~74% fewer tokens than JSON |\n` +
     `| \`runMcpServer(opts)\` | Serve the MCP protocol on stdin/stdout |\n` +
     `| \`schemaDoc()\` | The machine-readable description of every command and tool |\n` +
-    `| \`SKILL_MD\`, \`MCP_INSTRUCTIONS\` | The agent-facing guidance, as written by \`flamingo init\` |\n`,
+    `| \`SKILL_MD\`, \`MCP_INSTRUCTIONS\` | The agent-facing guidance, as written by \`flamingo init\` |\n` +
+    typesTable + "\n",
 );
 
 emit("skills/flamingo/SKILL.md", SKILL_MD);
