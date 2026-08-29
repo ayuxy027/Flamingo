@@ -135,7 +135,7 @@ Compiles twice to the same output path and compares digests:
 
 ```
 REPRODUCIBLE — both builds are byte-identical
-  sha256  be18cc2f0c0f3c701fb31d0c83b3f7a438e559d8724bbd8c5f3b40feb2e2b8be
+  sha256  fc5545d80686ed04338b64273633c45d09f9db95ca50bf97a38f43d24b7c3318
 ```
 
 *(Hash is for the current committed source. Bun embeds the output filename in the executable, so the comparison must fix
