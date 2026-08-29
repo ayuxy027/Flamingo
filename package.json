@@ -1,5 +1,5 @@
 {
-  "name": "@ayuxy027/flamingo",
+  "name": "tryflamingo",
   "version": "0.1.0",
   "description": "AI Native Frontend Testing Toolkit. A browser your agent drives in a loop. One file, zero dependencies, built on Bun.",
   "type": "module",
@@ -10,7 +10,8 @@
     ".": "./flamingo.ts"
   },
   "bin": {
-    "flamingo": "./flamingo.ts"
+    "flamingo": "./flamingo.ts",
+    "tryflamingo": "./flamingo.ts"
   },
   "files": [
     "flamingo.ts",

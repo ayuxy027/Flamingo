@@ -25,7 +25,7 @@ const fence = (lang: string, body: string) => "```" + lang + "\n" + body + "\n``
 emit(
   "docs/cli.md",
   GENERATED +
-    `# CLI reference\n\nflamingo ${doc.version} - ${doc.tagline}\n\n` +
+    `# CLI reference\n\nFlamingo ${doc.version} - ${doc.tagline}\n\n` +
     `## Commands\n\n| Command | Summary | Exit |\n| :-- | :-- | :-- |\n` +
     doc.commands.map((c) => `| \`${`flamingo ${c.name} ${c.args}`.trim()}\` | ${c.summary} | ${c.exits} |`).join("\n") +
     `\n\n` +
@@ -141,7 +141,7 @@ emit(
   "docs/api.md",
   GENERATED +
     `# Library API\n\n` +
-    fence("ts", `import { Engine } from "@ayuxy027/flamingo";\n\nawait using e = await Engine.open({ url: "http://localhost:3000" });\nconst step = await e.observe();`) +
+    fence("ts", `import { Engine } from "tryflamingo";\n\nawait using e = await Engine.open({ url: "http://localhost:3000" });\nconst step = await e.observe();`) +
     `\n\n${documented.length} public methods on \`Engine\`. Full behaviour and options: [MCP tools](./mcp-tools.md), [internals](./internals.md).\n\n` +
     `| Method | What it does |\n| :-- | :-- |\n` +
     documented.map((m) => `| \`${m.name}\` | ${m.doc} |`).join("\n") +

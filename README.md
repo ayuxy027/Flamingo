@@ -1,12 +1,12 @@
-# 🦩 flamingo
+# 🦩 Flamingo
 
 **AI Native Frontend Testing Toolkit: a browser your agent drives in a loop.**
 
 One file. Zero runtime dependencies. Bun only. See [`STDLIB.md`](./STDLIB.md) for the proof.
 
 ```bash
-npx flamingo init          # wires your agent (MCP + skill)
-bunx flamingo doctor       # check your setup
+npx tryflamingo init          # wires your agent (MCP + skill)
+bunx tryflamingo doctor       # check your setup
 flamingo crawl http://localhost:3000
 ```
 
@@ -25,8 +25,8 @@ That's it. Every control clicked, dead ones named with why.
 ## Install
 
 ```bash
-npx flamingo init              # or bunx
-bun add @ayuxy027/flamingo     # library / CLI
+npx tryflamingo init              # or bunx
+bun add tryflamingo     # library / CLI
 ```
 
 `init` writes two things and nothing else:
@@ -45,7 +45,7 @@ observe → act → observe
 Every action returns the new page state. Every observation tells you what changed.
 
 ```ts
-import { Engine } from "@ayuxy027/flamingo";
+import { Engine } from "tryflamingo";
 
 await using e = await Engine.open({ url: "http://localhost:3000" });
 
@@ -91,7 +91,7 @@ Exit codes: `0` ok, `1` problems found (for CI), `2` usage, `3` runtime.
 ## Library
 
 ```ts
-import { Engine } from "@ayuxy027/flamingo";
+import { Engine } from "tryflamingo";
 
 await using e = await Engine.open({ url: "http://localhost:3000" });
 await e.goto("http://localhost:3000/pricing");
@@ -135,7 +135,7 @@ On `webkit`, `detectDeadClicks` returns `registeredNetworkRequests: null`, which
 * `flamingo --help`, `flamingo schema`: everything machine-readable
 
 ```bash
-bun run build          # -> dist/flamingo (64MB standalone)
+bun run build          # -> dist/flamingo (61MB standalone)
 bun run proof          # zero-deps check
 bun test               # 129 tests, real browser
 ```

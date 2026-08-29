@@ -3,7 +3,7 @@
 # Library API
 
 ```ts
-import { Engine } from "@ayuxy027/flamingo";
+import { Engine } from "tryflamingo";
 
 await using e = await Engine.open({ url: "http://localhost:3000" });
 const step = await e.observe();

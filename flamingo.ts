@@ -2054,7 +2054,7 @@ name: flamingo
 description: Drive and test a running web frontend through a real browser. Use when asked to test, QA, debug, explore or interact with a web app - to find dead buttons, broken assets, layout breaks, console errors, or to verify a UI flow actually works end to end.
 ---
 
-# flamingo
+# Flamingo
 
 A browser you can drive in a loop. Every action returns the resulting page state,
 so you act, look at what changed, and act again until the goal is met.
@@ -2150,7 +2150,7 @@ confirm with \\\`detectDeadClicks\\\` at the same coordinates.
 
 const MCP_SERVER_KEY = "flamingo";
 
-export const MCP_INSTRUCTIONS = `flamingo drives a real browser in a loop: observe, act, observe.
+export const MCP_INSTRUCTIONS = `Flamingo drives a real browser in a loop: observe, act, observe.
 
 Call \`observe\` to see where you are. Then act (clickCoordinate, typeInput, pressKey,
 scroll). Every acting tool returns a fresh observation in its result, so you do not
@@ -2333,7 +2333,7 @@ const COMMANDS: Record<string, CommandSpec> = {
   },
   init: {
     args: "",
-    summary: "Wire flamingo into this project for an AI agent",
+    summary: "Wire Flamingo into this project for an AI agent",
     detail:
       "Writes an MCP server entry to .mcp.json so an agent can drive the browser, and\n" +
       "a skill to .claude/skills/flamingo/SKILL.md so it knows how to use it. Merges\n" +
@@ -2376,7 +2376,7 @@ function buildUsage(): string {
   const commandRows = Object.entries(COMMANDS).map(
     ([name, c]) => [`${name} ${c.args}`.trim(), c.summary] as [string, string],
   );
-  return `flamingo ${VERSION} - ${TAGLINE}
+  return `Flamingo ${VERSION} - ${TAGLINE}
 
 USAGE
   flamingo <command> [url] [options]
@@ -2723,7 +2723,7 @@ function runDoctor(json: boolean): number {
   }
 
   const mark = (b: boolean) => (b ? green("✓") : red("✗"));
-  console.log(`${bold(`flamingo ${VERSION}`)} ${dim("- " + TAGLINE)}\n`);
+  console.log(`${bold(`Flamingo ${VERSION}`)} ${dim("- " + TAGLINE)}\n`);
   console.log(`  ${mark(bunOk)} ${"bun".padEnd(9)} ${Bun.version} ${dim(`(requires ${required})`)}`);
   console.log(`    ${"platform".padEnd(9)} ${process.platform} ${process.arch}`);
   console.log(`  ${mark(isMac)} ${"webkit".padEnd(9)} ${report.backends.webkit.detail}`);
@@ -2734,7 +2734,7 @@ function runDoctor(json: boolean): number {
 
 export function schemaDoc() {
   return {
-    name: "@ayuxy027/flamingo",
+    name: "tryflamingo",
     version: VERSION,
     tagline: TAGLINE,
     runtime: { bun: ">=1.4.0" },

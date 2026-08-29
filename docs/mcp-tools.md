@@ -11,7 +11,7 @@ Backends: default `webkit`. These need `--backend chrome`: `interceptTraffic`, `
 Sent to every client on `initialize`:
 
 ```text
-flamingo drives a real browser in a loop: observe, act, observe.
+Flamingo drives a real browser in a loop: observe, act, observe.
 
 Call `observe` to see where you are. Then act (clickCoordinate, typeInput, pressKey,
 scroll). Every acting tool returns a fresh observation in its result, so you do not

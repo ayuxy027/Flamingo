@@ -2,7 +2,7 @@
 
 # CLI reference
 
-flamingo 0.1.0 - AI Native Frontend Testing Toolkit
+Flamingo 0.1.0 - AI Native Frontend Testing Toolkit
 
 ## Commands
 
@@ -17,7 +17,7 @@ flamingo 0.1.0 - AI Native Frontend Testing Toolkit
 | `flamingo responsive <url>` | Horizontal-overflow audit across viewports | 0 if no viewport overflows, 1 if any does |
 | `flamingo shot <url>` | Screenshot the viewport to a file | 0 on success |
 | `flamingo serve` | Run the MCP server on stdio | 0 when the client closes stdin |
-| `flamingo init` | Wire flamingo into this project for an AI agent | 0 on success |
+| `flamingo init` | Wire Flamingo into this project for an AI agent | 0 on success |
 | `flamingo doctor` | Check the environment and report what works here | 0 if the toolkit is usable, 1 if a required piece is missing |
 | `flamingo schema` | Print the machine-readable API description as JSON | 0 always |
 
@@ -139,7 +139,7 @@ flamingo serve --backend chrome
 
 ## `flamingo init`
 
-Wire flamingo into this project for an AI agent
+Wire Flamingo into this project for an AI agent
 
 **Options:** `--dir <path>`, `--backend <name>`, `--skill-only`, `--mcp-only`, `--force`, `--json`
 

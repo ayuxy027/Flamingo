@@ -1,5 +1,5 @@
 {
-  "name": "@ayuxy027/flamingo",
+  "name": "tryflamingo",
   "version": "0.1.0",
   "tagline": "AI Native Frontend Testing Toolkit",
   "runtime": {
@@ -160,7 +160,7 @@
     {
       "name": "init",
       "args": "",
-      "summary": "Wire flamingo into this project for an AI agent",
+      "summary": "Wire Flamingo into this project for an AI agent",
       "flags": [
         "--dir <path>",
         "--backend <name>",

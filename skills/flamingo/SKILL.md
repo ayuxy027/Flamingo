@@ -3,7 +3,7 @@ name: flamingo
 description: Drive and test a running web frontend through a real browser. Use when asked to test, QA, debug, explore or interact with a web app - to find dead buttons, broken assets, layout breaks, console errors, or to verify a UI flow actually works end to end.
 ---
 
-# flamingo
+# Flamingo
 
 A browser you can drive in a loop. Every action returns the resulting page state,
 so you act, look at what changed, and act again until the goal is met.

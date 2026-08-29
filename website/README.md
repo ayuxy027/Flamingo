@@ -1,6 +1,6 @@
 # website
 
-The flamingo site: a landing page and a deliberately broken demo app.
+The Flamingo site: a landing page and a deliberately broken demo app.
 
 Plain static HTML with no build step and no runtime dependencies, which keeps the
 repository's zero-dependency claim true everywhere, including here. Vercel serves
@@ -47,6 +47,6 @@ bun run flamingo.ts interact http://localhost:8080/demo.html
 bun run flamingo.ts stress   http://localhost:8080/demo.html --targets 6
 ```
 
-The landing page is checked by flamingo itself: no console errors, no broken
+The landing page is checked by Flamingo itself: no console errors, no broken
 assets, and no horizontal overflow from 375px to 1440px. The demo app is expected
 to fail those checks, which is the point of it.
