@@ -7,9 +7,14 @@ repository's zero-dependency claim true everywhere — including here. Vercel
 serves it as-is: point a project at this directory, no framework preset needed.
 
 ```
-index.html   landing page
-demo.html    the demo app, every fault in it planted on purpose
+index.html    landing page, five sections
+demo.html     the demo app, every fault in it planted on purpose
+assets/       mascot artwork, WebP with alpha
 ```
+
+Artwork is WebP for size (1.5MB of PNG became 284KB) with one PNG kept for the
+favicon and social preview. Note that WebKit screenshots omit WebP with alpha, so
+capture this site with `--backend chrome`.
 
 Locally:
 

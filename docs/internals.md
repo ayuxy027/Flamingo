@@ -77,6 +77,11 @@ returns `null`. Auto-confirming while crawling an admin panel would delete thing
 in-page programs are template literals, so `\s` must be written `\\s`. The
 unescaped version silently replaced every `s` in the page with a space.
 
+**WebKit snapshots omit WebP images with alpha.** They decode correctly, lay out
+with the right dimensions and render for a real user, but `captureViewport` on the
+webkit backend returns a frame without them. Chrome captures them. If a screenshot
+looks like it is missing artwork, check the image format before hunting CSS.
+
 ## Coordinates
 
 Everything reported and accepted is CSS pixels in the current viewport.
