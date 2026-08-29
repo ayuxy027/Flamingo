@@ -1,13 +1,13 @@
 # 🦩 flamingo
 
-### Unblind your agent.
+### AI Native Frontend Testing Toolkit
 
-**AI-native browser automation and frontend testing — in one file, with zero dependencies.**
+**One file. Zero dependencies. Built on Bun.**
 
-An AI agent looking at your frontend is blind. Playwright hands it a DOM dump it
-burns thousands of tokens failing to parse. flamingo hands it a short list of
-what is actually visible and clickable — and, like the bird it is named after,
-filters the few things that matter out of a whole lake of mud.
+An AI agent looking at your frontend is effectively blind. Playwright hands it a
+DOM dump it burns thousands of tokens failing to parse. flamingo hands it a short
+list of what is actually visible and clickable — and, like the bird it is named
+after, filters the few things that matter out of a whole lake of mud.
 
 Built for **Zero Dependency 2026**, **Track A — Developer Tools & CLI**.
 Runtime: Bun ≥ 1.4. Runtime dependencies: **none**.
@@ -49,6 +49,38 @@ http://localhost:3000  webkit backend
 ```
 
 ---
+
+## Install
+
+```bash
+bun add @ayuxy027/flamingo
+```
+
+Then check the environment — the first thing to run, and the first thing to ask
+for when anything misbehaves:
+
+```bash
+bunx flamingo doctor
+```
+```
+flamingo 0.1.0 — AI Native Frontend Testing Toolkit
+
+  ✓ bun       1.4.0 (requires >=1.4.0)
+    platform  darwin arm64
+  ✓ webkit    system WebKit — no browser install needed
+  ✓ chrome    /Applications/Brave Browser.app/Contents/MacOS/Brave Browser
+
+✓ ready
+```
+
+Every command carries its own help (`flamingo crawl --help`), and
+`flamingo schema` prints the entire API — 16 MCP tools with JSON Schemas, 8 CLI
+commands with flags and exit codes — as one JSON document, so an agent can learn
+to call everything without reading these docs:
+
+```bash
+flamingo schema | jq '.tools[].name'
+```
 
 ## Build and run
 
@@ -103,7 +135,7 @@ Compiles twice to the same output path and compares digests:
 
 ```
 REPRODUCIBLE — both builds are byte-identical
-  sha256  084aa53b0be58557ca2aef26886d40829caad22c5439f63c30d5c772df4de3c1
+  sha256  09782193da1f910724195608e880c784b6cfaf58c6525cb2bddb38a072092e98
 ```
 
 *(Hash is for the current committed source. Bun embeds the output filename in the executable, so the comparison must fix
@@ -152,6 +184,8 @@ flamingo <command> [url] [options]
   responsive <url>    Horizontal-overflow audit across viewports
   shot <url>          Screenshot the viewport to a file
   serve               Run the MCP server on stdio
+  doctor              Check the environment and report what works here
+  schema              Print the machine-readable API description as JSON
 ```
 
 Key options: `--json`, `--backend webkit|chrome`, `--width`/`--height`,
@@ -261,11 +295,13 @@ never measured is never mistaken for a measured zero.
 ## Tests
 
 ```bash
-bun test          # 59 tests against a real browser and a real fixture server
+bun test          # 64 tests against a real browser and a real fixture server
 bun run typecheck
 ```
 
-Every backend-agnostic API is asserted on **both** backends against a
+The installed package is verified too: the bin links and runs, the library
+import works, and `schema` is asserted to describe every tool well enough to call
+it blind. Every backend-agnostic API is asserted on **both** backends against a
 deliberately broken page (404 image, load-time console error, a button under a
 backdrop, an inert div, 1400px overflow). The MCP server and the CLI are both
 driven as real subprocesses over real pipes, including every exit code.

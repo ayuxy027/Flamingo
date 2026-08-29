@@ -1036,35 +1036,152 @@ export async function runMcpServer(opts: EngineOptions = {}): Promise<void> {
 // ===========================================================================
 
 const VERSION = "0.1.0";
+const TAGLINE = "AI Native Frontend Testing Toolkit";
 
-const USAGE = `flamingo ${VERSION} — AI-native browser automation on Bun.WebView
+/**
+ * One metadata table drives the global help, the per-command help and the
+ * machine-readable `schema` output, so they cannot drift apart.
+ */
+interface CommandSpec {
+  args: string;
+  summary: string;
+  detail: string;
+  flags: string[];
+  exits: string;
+  examples: string[];
+}
+
+const GLOBAL_FLAGS: Array<[string, string]> = [
+  ["--json", "Emit a single JSON document on stdout, nothing else"],
+  ["--backend <name>", "webkit (default, macOS, no browser install) | chrome"],
+  ["--chrome-path <p>", "Chrome/Chromium/Brave executable (or set BUN_CHROME_PATH)"],
+  ["--width <n>", "Viewport width (default 1280)"],
+  ["--height <n>", "Viewport height (default 800)"],
+  ["--no-color", "Disable ANSI colour"],
+  ["-h, --help", "Show help; after a command, show that command's help"],
+  ["-v, --version", "Show version"],
+];
+
+const COMMANDS: Record<string, CommandSpec> = {
+  audit: {
+    args: "<url>",
+    summary: "Health report: console errors, broken assets, layout overflow",
+    detail:
+      "Loads the page and consolidates everything that looks wrong into one scorecard:\n" +
+      "console errors and uncaught exceptions, broken images and stylesheets, and\n" +
+      "horizontal overflow across viewports. Console capture starts before the first\n" +
+      "navigation, so load-time failures are included.",
+    flags: ["--viewports <list>", "--json"],
+    exits: "0 if nothing is wrong, 1 if any problem is found",
+    examples: [
+      "flamingo audit http://localhost:3000",
+      "flamingo audit http://localhost:3000 --json | jq .details",
+      "flamingo audit https://staging.example.com --backend chrome",
+    ],
+  },
+  crawl: {
+    args: "<url>",
+    summary: "Click every control and report the dead ones",
+    detail:
+      "Walks the interactive tree and clicks each control, watching for DOM mutations,\n" +
+      "network requests, console output, navigation and focus. Controls that produce\n" +
+      "none of those are reported dead, with the reason: swallowed by an overlay, or\n" +
+      "no handler wired at all.",
+    flags: ["--max <n>", "--dwell <ms>", "--json"],
+    exits: "0 if every control responds, 1 if any is dead",
+    examples: [
+      "flamingo crawl http://localhost:3000",
+      "flamingo crawl http://localhost:3000 --max 50 --dwell 1200",
+    ],
+  },
+  tree: {
+    args: "<url>",
+    summary: "Actionable elements with click-ready coordinates",
+    detail:
+      "Returns only elements an agent can act on: in the viewport, visible, and not\n" +
+      "occluded by anything else at their own centre point. Each carries a CSS-space\n" +
+      "centre you can pass straight back to a click.",
+    flags: ["--max <n>", "--json"],
+    exits: "0 always (unless the page fails to load)",
+    examples: ["flamingo tree http://localhost:3000 --json", "flamingo tree http://localhost:3000 --max 20"],
+  },
+  responsive: {
+    args: "<url>",
+    summary: "Horizontal-overflow audit across viewports",
+    detail:
+      "Resizes through each viewport and reports horizontal overflow, naming the worst\n" +
+      "offending elements. Neither backend emits a layout-settled signal, so --settle\n" +
+      "is a heuristic wait; raise it for animation-heavy pages.",
+    flags: ["--viewports <list>", "--settle <ms>", "--json"],
+    exits: "0 if no viewport overflows, 1 if any does",
+    examples: ["flamingo responsive http://localhost:3000 --viewports 1920x1080,375x812"],
+  },
+  shot: {
+    args: "<url>",
+    summary: "Screenshot the viewport to a file",
+    detail:
+      "Writes an image and reports its path, byte size, pixel size, CSS size and\n" +
+      "deviceScaleFactor. On a retina display the image is 2x the CSS size while all\n" +
+      "coordinates are CSS-space, so divide by that factor before clicking them.",
+    flags: ["--out <path>", "--format <png|jpeg|webp>", "--json"],
+    exits: "0 on success",
+    examples: ["flamingo shot http://localhost:3000 --out shot.png"],
+  },
+  serve: {
+    args: "",
+    summary: "Run the MCP server on stdio",
+    detail:
+      "Serves every API as an MCP tool over newline-delimited JSON-RPC on stdin/stdout,\n" +
+      "so an agent drives the browser through tool calls instead of parsing CLI output.\n" +
+      "The browser launches lazily on the first tool call. Run `flamingo schema` to see\n" +
+      "the tool definitions without starting a server.",
+    flags: ["--backend <name>", "--width <n>", "--height <n>"],
+    exits: "0 when the client closes stdin",
+    examples: ["flamingo serve", "flamingo serve --backend chrome"],
+  },
+  doctor: {
+    args: "",
+    summary: "Check the environment and report what works here",
+    detail:
+      "Verifies the Bun version, reports the platform, and probes which backends are\n" +
+      "usable on this machine, including where a Chrome-family binary was found. Run\n" +
+      "this first if anything behaves unexpectedly after install.",
+    flags: ["--json"],
+    exits: "0 if the toolkit is usable, 1 if a required piece is missing",
+    examples: ["flamingo doctor", "flamingo doctor --json"],
+  },
+  schema: {
+    args: "",
+    summary: "Print the machine-readable API description as JSON",
+    detail:
+      "Emits every MCP tool with its JSON Schema, plus every CLI command with its flags\n" +
+      "and exit codes. Intended for agents: read this once and you know how to call\n" +
+      "everything without reading the docs.",
+    flags: [],
+    exits: "0 always",
+    examples: ["flamingo schema", "flamingo schema | jq '.tools[].name'"],
+  },
+};
+
+const pad = (rows: Array<[string, string]>, indent = "  ") => {
+  const w = Math.max(...rows.map(([l]) => l.length));
+  return rows.map(([l, r]) => `${indent}${l.padEnd(w)}  ${r}`).join("\n");
+};
+
+function buildUsage(): string {
+  const commandRows = Object.entries(COMMANDS).map(
+    ([name, c]) => [`${name} ${c.args}`.trim(), c.summary] as [string, string],
+  );
+  return `flamingo ${VERSION} — ${TAGLINE}
 
 USAGE
   flamingo <command> [url] [options]
 
 COMMANDS
-  audit <url>         Health report: console errors, broken assets, layout overflow
-  crawl <url>         Click every control and report the dead ones
-  tree <url>          Actionable elements with click-ready coordinates
-  responsive <url>    Horizontal-overflow audit across viewports
-  shot <url>          Screenshot the viewport to a file
-  serve               Run the MCP server on stdio
+${pad(commandRows)}
 
 OPTIONS
-  --json              Emit a single JSON document on stdout, nothing else
-  --backend <name>    webkit (default, macOS, no browser install) | chrome
-  --chrome-path <p>   Chrome/Chromium/Brave executable (or set BUN_CHROME_PATH)
-  --width <n>         Viewport width  (default 1280)
-  --height <n>        Viewport height (default 800)
-  --viewports <list>  Comma-separated, e.g. 1920x1080,768x1024,375x812
-  --max <n>           Max elements for \`tree\` (100) / \`crawl\` (20)
-  --dwell <ms>        How long to watch for a reaction per click (default 700)
-  --settle <ms>       Wait after each resize (default 250)
-  --out <path>        Output path for \`shot\`
-  --format <fmt>      png (default) | jpeg | webp (webp needs --backend chrome)
-  --no-color          Disable ANSI colour
-  -h, --help          Show this help
-  -v, --version       Show version
+${pad(GLOBAL_FLAGS)}
 
 EXIT CODES
   0  completed, nothing wrong found
@@ -1073,13 +1190,48 @@ EXIT CODES
   3  runtime failure (browser launch or navigation failed)
 
 EXAMPLES
-  flamingo audit http://localhost:3000
+  flamingo doctor
   flamingo crawl http://localhost:3000
   flamingo audit http://localhost:3000 --json | jq .details
-  flamingo responsive http://localhost:3000 --viewports 1920x1080,375x812
-  flamingo tree http://localhost:3000 --backend chrome
-  flamingo serve --backend chrome
-`;
+  flamingo schema | jq '.tools[].name'
+
+Run \`flamingo <command> --help\` for detail on any command.`;
+}
+
+function commandHelp(name: string): string {
+  const c = COMMANDS[name]!;
+  const flagRows = c.flags.map((f) => {
+    const g = GLOBAL_FLAGS.find(([l]) => l.startsWith(f.split(" ")[0]!));
+    return [f, g ? g[1] : LOCAL_FLAG_HELP[f.split(" ")[0]!] ?? ""] as [string, string];
+  });
+  return `flamingo ${name} ${c.args}`.trim() + ` — ${c.summary}
+
+DESCRIPTION
+${c.detail
+  .split("\n")
+  .map((l) => "  " + l)
+  .join("\n")}
+
+OPTIONS
+${flagRows.length ? pad(flagRows) : "  (none beyond the global options)"}
+
+EXIT CODES
+  ${c.exits}
+
+EXAMPLES
+${c.examples.map((e) => "  " + e).join("\n")}`;
+}
+
+/** Help text for flags that are specific to one command. */
+const LOCAL_FLAG_HELP: Record<string, string> = {
+  "--viewports": "Comma-separated, e.g. 1920x1080,768x1024,375x812",
+  "--max": "Max elements to consider (tree 100, crawl 20)",
+  "--dwell": "How long to watch for a reaction per click (default 700ms)",
+  "--settle": "Wait after each resize (default 250ms)",
+  "--out": "Output path for the image",
+  "--format": "png (default) | jpeg | webp (webp needs --backend chrome)",
+  "--json": "Emit a single JSON document on stdout, nothing else",
+};
 
 /** Exit codes, named so the call sites read as intent rather than magic numbers. */
 const EXIT = { ok: 0, problems: 1, usage: 2, runtime: 3 } as const;
@@ -1248,15 +1400,110 @@ function printResponsiveHuman(r: any) {
   console.log();
 }
 
+// ------------------------------------------------------------- introspection
+
+/**
+ * Environment check. The first thing to run after installing, and the first
+ * thing to ask for when something behaves oddly.
+ */
+function runDoctor(json: boolean): number {
+  const required = ">=1.4.0";
+  const bunOk = Bun.semver.satisfies(Bun.version, required);
+  const isMac = process.platform === "darwin";
+  const chromePath = Bun.env.BUN_CHROME_PATH ?? CHROME_CANDIDATES.find((p) => existsSync(p)) ?? null;
+  const ok = bunOk && (isMac || chromePath !== null);
+
+  const report = {
+    version: VERSION,
+    bun: { version: Bun.version, required, ok: bunOk },
+    platform: { os: process.platform, arch: process.arch },
+    backends: {
+      webkit: {
+        available: isMac,
+        detail: isMac ? "system WebKit — no browser install needed" : "macOS only; use --backend chrome",
+      },
+      chrome: {
+        available: chromePath !== null,
+        path: chromePath,
+        detail: chromePath ? "found" : "no Chrome/Chromium/Brave found — set BUN_CHROME_PATH",
+      },
+    },
+    ok,
+  };
+
+  if (json) {
+    console.log(JSON.stringify(report));
+    return ok ? EXIT.ok : EXIT.problems;
+  }
+
+  const mark = (b: boolean) => (b ? green("✓") : red("✗"));
+  console.log(`${bold(`flamingo ${VERSION}`)} ${dim("— " + TAGLINE)}\n`);
+  console.log(`  ${mark(bunOk)} ${"bun".padEnd(9)} ${Bun.version} ${dim(`(requires ${required})`)}`);
+  console.log(`    ${"platform".padEnd(9)} ${process.platform} ${process.arch}`);
+  console.log(`  ${mark(isMac)} ${"webkit".padEnd(9)} ${report.backends.webkit.detail}`);
+  console.log(`  ${mark(chromePath !== null)} ${"chrome".padEnd(9)} ${chromePath ?? report.backends.chrome.detail}`);
+  console.log(ok ? green("\n✓ ready\n") : red("\n✗ not usable here — see above\n"));
+  return ok ? EXIT.ok : EXIT.problems;
+}
+
+/**
+ * The whole API as one JSON document: every MCP tool with its schema, every CLI
+ * command with its flags and exit codes. An agent reads this once instead of
+ * reading the docs.
+ */
+function schemaDoc() {
+  return {
+    name: "@ayuxy027/flamingo",
+    version: VERSION,
+    tagline: TAGLINE,
+    runtime: { bun: ">=1.4.0" },
+    backends: {
+      default: "webkit",
+      available: ["webkit", "chrome"],
+      chromeOnly: ["interceptTraffic", "hoverCoordinate", "HTTP status codes in scanBrokenAssets"],
+    },
+    exitCodes: {
+      "0": "completed, nothing wrong found",
+      "1": "completed, problems found",
+      "2": "usage error",
+      "3": "runtime failure (browser launch or navigation failed)",
+    },
+    commands: Object.entries(COMMANDS).map(([name, c]) => ({
+      name,
+      args: c.args,
+      summary: c.summary,
+      flags: c.flags,
+      exits: c.exits,
+      examples: c.examples,
+    })),
+    tools: Object.entries(TOOLS).map(([name, t]) => ({
+      name,
+      description: t.description,
+      inputSchema: t.inputSchema,
+    })),
+  };
+}
+
 // ------------------------------------------------------------------ commands
 
 async function runCli(argv: string[]): Promise<number> {
   const p = parseArgs(argv);
 
   if (p.flags.has("version")) { console.log(VERSION); return EXIT.ok; }
-  if (p.flags.has("help") || !p.command) { console.log(USAGE); return p.command ? EXIT.ok : EXIT.usage; }
+  if (p.flags.has("help")) {
+    console.log(p.command && COMMANDS[p.command] ? commandHelp(p.command) : buildUsage());
+    return EXIT.ok;
+  }
+  if (!p.command) { console.log(buildUsage()); return EXIT.usage; }
+  if (!COMMANDS[p.command]) {
+    throw new UsageError(`Unknown command: ${p.command}. Run \`flamingo --help\` for the list.`);
+  }
 
   const json = p.flags.get("json") === true;
+  if (p.command === "schema") {
+    console.log(JSON.stringify(schemaDoc(), null, 2));
+    return EXIT.ok;
+  }
   // Colour is meaningless in a pipe and forbidden in --json output.
   COLOR = !json && !p.flags.has("no-color") && !Bun.env.NO_COLOR && Boolean(process.stdout.isTTY);
 
@@ -1272,13 +1519,11 @@ async function runCli(argv: string[]): Promise<number> {
     height: num(p.flags, "height", 800),
   };
 
+  if (p.command === "doctor") return runDoctor(json);
+
   if (p.command === "serve") {
     await runMcpServer(engineOpts);
     return EXIT.ok;
-  }
-
-  if (!["audit", "crawl", "tree", "responsive", "shot"].includes(p.command)) {
-    throw new UsageError(`Unknown command: ${p.command}`);
   }
 
   const url = requireUrl(p);

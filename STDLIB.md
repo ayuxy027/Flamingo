@@ -18,7 +18,7 @@ remaining `import`/`require`/dynamic-import specifier. The only two that exist a
 
 ## Substitutions
 
-Sixteen packages we would otherwise have installed, and what replaced each.
+Seventeen packages we would otherwise have installed, and what replaced each.
 
 | # | Normally | Instead | Where |
 | :-- | :-- | :-- | :-- |
@@ -38,6 +38,7 @@ Sixteen packages we would otherwise have installed, and what replaced each.
 | 14 | `ts-node` / `tsx` | Bun executes TypeScript directly; no transpile step, no config | everywhere |
 | 15 | `pkg` / `nexe` / `esbuild` | `bun build --compile` for the single self-contained binary | `bun run build` |
 | 16 | `hasha` / `crypto-hash` | `new Bun.CryptoHasher("sha256")` for the reproducible-build digests | `scripts/verify-reproducible.ts` |
+| 17 | `semver` | `Bun.semver.satisfies()` for the runtime version check in `doctor` | §4 `runDoctor` |
 
 Two more worth naming: **JSON Schema builders** (`zod-to-json-schema` and friends)
 are plain object literals in the MCP tool table, and **`uuid`** is unnecessary

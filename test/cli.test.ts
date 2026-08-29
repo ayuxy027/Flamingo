@@ -146,3 +146,71 @@ test("crawl exits 0 when every control responds", async () => {
   expect(r.exitCode).toBe(0);
   expect(JSON.parse(r.stdout).dead).toHaveLength(0);
 }, 90_000);
+
+describe("self-describing surface (what an agent needs after install)", () => {
+  test("doctor reports the environment and exits 0 when usable", async () => {
+    const r = await cli("doctor");
+    expect(r.exitCode).toBe(0);
+    expect(r.stdout).toContain("bun");
+    expect(r.stdout).toContain("webkit");
+    expect(r.stdout).toContain("chrome");
+  }, 30_000);
+
+  test("doctor --json is a single machine-readable document", async () => {
+    const r = await cli("doctor", "--json");
+    const d = JSON.parse(r.stdout);
+    expect(d.ok).toBe(true);
+    expect(d.bun.ok).toBe(true);
+    expect(d.backends.webkit).toHaveProperty("available");
+    expect(d.backends.chrome).toHaveProperty("path");
+  }, 30_000);
+
+  test("schema describes every tool and command well enough to call them blind", async () => {
+    const r = await cli("schema");
+    expect(r.exitCode).toBe(0);
+    const d = JSON.parse(r.stdout);
+
+    expect(d.tools.length).toBeGreaterThanOrEqual(16);
+    expect(d.commands.length).toBeGreaterThanOrEqual(8);
+    expect(d.exitCodes["1"]).toBeDefined();
+
+    for (const t of d.tools) {
+      expect(t.name).toBeTruthy();
+      expect(t.description.length).toBeGreaterThan(20);
+      expect(t.inputSchema.type).toBe("object");
+    }
+    for (const c of d.commands) {
+      expect(c.summary.length).toBeGreaterThan(10);
+      expect(c.exits).toBeTruthy();
+      expect(Array.isArray(c.examples)).toBe(true);
+      expect(c.examples.length).toBeGreaterThan(0);
+    }
+    // the chrome-only surface must be discoverable, not learned by hitting an error
+    expect(d.backends.chromeOnly.join(" ")).toContain("interceptTraffic");
+  }, 30_000);
+
+  test("every command has its own help, distinct from the global help", async () => {
+    const { stdout: global } = await cli("--help");
+    const names = JSON.parse((await cli("schema")).stdout).commands.map((c: any) => c.name);
+    expect(names.length).toBeGreaterThanOrEqual(8);
+
+    for (const name of names) {
+      const r = await cli(name, "--help");
+      expect(r.exitCode).toBe(0);
+      expect(r.stdout).toContain("DESCRIPTION");
+      expect(r.stdout).toContain("EXIT CODES");
+      expect(r.stdout).toContain("EXAMPLES");
+      expect(r.stdout).not.toBe(global);
+    }
+  }, 60_000);
+
+  test("the published bin is executable and has a bun shebang", async () => {
+    const pkg = await Bun.file("package.json").json();
+    const binPath = Object.values(pkg.bin)[0] as string;
+    const file = Bun.file(binPath);
+    expect(await file.exists()).toBe(true);
+    expect((await file.text()).startsWith("#!/usr/bin/env bun")).toBe(true);
+    // everything the manifest promises to publish must actually be there
+    for (const f of pkg.files) expect(await Bun.file(f).exists()).toBe(true);
+  });
+});
