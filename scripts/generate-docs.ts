@@ -95,6 +95,8 @@ const OPTION_DOCS: Record<string, string> = {
   profileDirectory: "Persist cookies and storage here to stay logged in between runs. Ephemeral by default.",
   evaluateTimeoutMs: "How long an in-page evaluate may stall before the view is rebuilt. Default `10000`.",
   reducedMotion: "Collapse CSS animations and transitions to zero duration so geometry is deterministic. Default `true`.",
+  readyTimeoutMs:
+    "How long a navigation may wait for the page to paint its first controls and stop changing, so a client-rendered app is never measured while still blank. Returns as soon as the page is stable, not after the full budget. `0` disables the wait. Default `5000`.",
 };
 
 const TYPE_DOCS: Record<string, string> = {

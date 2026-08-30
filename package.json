@@ -1,6 +1,6 @@
 {
   "name": "tryflamingo",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "AI-native alternative to Playwright and Puppeteer. One file, zero dependencies, Bun.",
   "type": "module",
   "module": "flamingo.ts",

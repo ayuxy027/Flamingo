@@ -19,7 +19,7 @@ const step = await e.observe();
 | `clickCoordinate` | Click. |
 | `close` | Close the view and release its browser process. |
 | `compileHealthReport` | Consolidated scorecard: console errors, broken assets, dead clicks and layout overflow, with a pass/fail total. |
-| `crawl` | Click every actionable control on the page and report which ones do nothing, and why: swallowed by an overlay, or no handler fired at all. |
+| `crawl` | Scroll the whole page, click every actionable control on it, and report which ones do nothing, and why: swallowed by an overlay, or no handler fired at all. |
 | `detectDeadClicks` | Click a coordinate and report whether anything happened: DOM mutations, console output, navigation, and network requests. |
 | `detectPointerBlocker` | Explain whether a click at (x, y) reaches an interactive element, and name the element blocking it if not. |
 | `getInteractiveTree` | Compact list of every element that can actually be acted on, with click-ready CSS-space centre coordinates. |
@@ -54,6 +54,7 @@ const step = await e.observe();
 | `profileDirectory` | Persist cookies and storage here to stay logged in between runs. Ephemeral by default. |
 | `evaluateTimeoutMs` | How long an in-page evaluate may stall before the view is rebuilt. Default `10000`. |
 | `reducedMotion` | Collapse CSS animations and transitions to zero duration so geometry is deterministic. Default `true`. |
+| `readyTimeoutMs` | How long a navigation may wait for the page to paint its first controls and stop changing, so a client-rendered app is never measured while still blank. Returns as soon as the page is stable, not after the full budget. `0` disables the wait. Default `5000`. |
 
 ## Also exported
 

@@ -233,6 +233,45 @@ const settleProbe = (maxMs: number) => `new Promise((resolve) => {
   requestAnimationFrame(tick);
 })`;
 
+const readyProbe = (maxMs: number, quietMs: number) => `new Promise((resolve) => {
+  const SEL = ${SELECTOR};
+  const started = performance.now();
+  let lastMutation = started;
+  const obs = new MutationObserver(() => { lastMutation = performance.now(); });
+  obs.observe(document.documentElement, { subtree: true, childList: true, attributes: true, characterData: true });
+  const painted = () => {
+    const b = document.body;
+    if (!b) return false;
+    if (document.querySelectorAll(SEL).length > 0) return true;
+    return document.readyState === "complete" && b.getBoundingClientRect().height > 0;
+  };
+  const done = (ready) => {
+    obs.disconnect();
+    resolve({ ready, ms: Math.round(performance.now() - started) });
+  };
+  const tick = () => {
+    const now = performance.now();
+    if (painted() && now - lastMutation >= ${quietMs}) return done(true);
+    if (now - started >= ${maxMs}) return done(false);
+    requestAnimationFrame(tick);
+  };
+  requestAnimationFrame(tick);
+})`;
+
+const quietProbe = (quietMs: number, capMs: number) => `new Promise((resolve) => {
+  const started = performance.now();
+  let lastMutation = started;
+  const obs = new MutationObserver(() => { lastMutation = performance.now(); });
+  obs.observe(document.documentElement, { subtree: true, childList: true, attributes: true, characterData: true });
+  const tick = () => {
+    const now = performance.now();
+    if (now - lastMutation >= ${quietMs}) { obs.disconnect(); return resolve({ quiet: true, ms: Math.round(now - started) }); }
+    if (now - started >= ${capMs}) { obs.disconnect(); return resolve({ quiet: false, ms: Math.round(now - started) }); }
+    requestAnimationFrame(tick);
+  };
+  requestAnimationFrame(tick);
+})`;
+
 const findElement = (selector: string | null, textContains: string | null) => `(() => {
   ${DESCRIBE}
   ${DEEP}
@@ -306,12 +345,22 @@ const overflowScan = (max: number) => `(() => {
   const widest = Math.max(de.scrollWidth, document.body ? document.body.scrollWidth : 0);
   const docOverflow = widest - vw;
   const offenders = [];
+  let clipped = 0;
+  const clippedByAncestor = (el) => {
+    for (let n = el.parentElement; n; n = n.parentElement) {
+      const ox = getComputedStyle(n).overflowX;
+      if (ox === "auto" || ox === "scroll" || ox === "hidden") return true;
+    }
+    return false;
+  };
   if (docOverflow > 0) {
     for (const el of document.querySelectorAll("body *")) {
       const r = el.getBoundingClientRect();
       if (r.width < 1 || r.height < 1) continue;
       const over = Math.round(r.right - vw);
-      if (over > 0) offenders.push({ elementSelector: describe(el), overflowWidth: over });
+      if (over <= 0) continue;
+      if (clippedByAncestor(el)) { clipped++; continue; }
+      offenders.push({ elementSelector: describe(el), overflowWidth: over });
     }
     offenders.sort((a, b) => b.overflowWidth - a.overflowWidth);
   }
@@ -320,6 +369,7 @@ const overflowScan = (max: number) => `(() => {
     overflowWidth: Math.max(0, Math.round(docOverflow)),
     offenders: offenders.slice(0, ${max}),
     offenderCount: offenders.length,
+    clippedDescendants: clipped,
     viewport: { width: vw, height: innerHeight },
   };
 })()`;
@@ -343,7 +393,7 @@ const brokenAssetsProbe = `(() => {
   return out;
 })()`;
 
-const installReactionProbe = `(() => {
+const installReactionProbe = (noiseMs: number, capMs: number) => `new Promise((resolve) => {
   const w = window;
   if (w.__flamingoCleanup) { try { w.__flamingoCleanup(); } catch (e) {} }
   const a0 = document.activeElement;
@@ -356,7 +406,28 @@ const installReactionProbe = `(() => {
   w.alert = function () { w.__flamingoDialogs++; };
   w.confirm = function () { w.__flamingoDialogs++; return false; };
   w.prompt = function () { w.__flamingoDialogs++; return null; };
-  const obs = new MutationObserver((ms) => { w.__flamingoMut += ms.length; });
+  const churn = new Map();
+  const noisy = new Set();
+  let sampling = true;
+  let lastMutation = performance.now();
+  const obs = new MutationObserver((ms) => {
+    lastMutation = performance.now();
+    if (sampling) {
+      for (const m of ms) {
+        const n = (churn.get(m.target) || 0) + 1;
+        churn.set(m.target, n);
+        if (n >= 2) noisy.add(m.target);
+      }
+      return;
+    }
+    for (const m of ms) {
+      let node = m.target, ignore = false;
+      for (let hops = 0; node && hops < 40; hops++, node = node.parentNode) {
+        if (noisy.has(node)) { ignore = true; break; }
+      }
+      if (!ignore) w.__flamingoMut++;
+    }
+  });
   obs.observe(document.documentElement, { subtree: true, childList: true, attributes: true, characterData: true });
   const onFocus = (e) => {
     const t = e.target;
@@ -374,8 +445,21 @@ const installReactionProbe = `(() => {
     w.prompt = nativeDialogs.prompt;
     w.__flamingoCleanup = null;
   };
-  return true;
-})()`;
+
+  const started = performance.now();
+  const tick = () => {
+    const now = performance.now();
+    const quiet = now - lastMutation >= ${noiseMs};
+    if (quiet || now - started >= ${capMs}) {
+      sampling = false;
+      w.__flamingoMut = 0;
+      w.__flamingoUrl0 = location.href;
+      return resolve({ quiet, ignoredNoisyNodes: noisy.size });
+    }
+    requestAnimationFrame(tick);
+  };
+  requestAnimationFrame(tick);
+})`;
 
 const readReactionProbe = `({
   mutations: typeof window.__flamingoMut === "number" ? window.__flamingoMut : -1,
@@ -436,6 +520,7 @@ export interface EngineOptions {
   profileDirectory?: string;
   evaluateTimeoutMs?: number;
   reducedMotion?: boolean;
+  readyTimeoutMs?: number;
 }
 
 export interface ConsoleEntry {
@@ -625,6 +710,7 @@ export class Engine {
   private recycles = 0;
   private readonly evaluateTimeoutMs: number;
   private readonly reducedMotion: boolean;
+  private readonly readyTimeoutMs: number;
   private readonly onProgress: (stage: string, detail: string) => void;
   private lastObservation: { consoleIndex: number; networkIndex: number; signature: string } | null = null;
 
@@ -635,6 +721,7 @@ export class Engine {
     this.height = opts.height ?? 800;
     this.evaluateTimeoutMs = opts.evaluateTimeoutMs ?? 10_000;
     this.reducedMotion = opts.reducedMotion ?? true;
+    this.readyTimeoutMs = opts.readyTimeoutMs ?? 5_000;
     this.onProgress = opts.onProgress ?? (() => {});
 
     let backend: Bun.WebView.Backend;
@@ -805,6 +892,7 @@ export class Engine {
     }
     const page = await this.evaluate<{ title: string; url: string }>(installErrorForwarder).catch(() => null);
     if (this.reducedMotion) await this.evaluate(freezeMotion).catch(() => {});
+    if (!timedOut) await this.awaitReady();
     return {
       url: page?.url ?? this.view.url,
       title: page?.title ?? this.view.title,
@@ -826,6 +914,7 @@ export class Engine {
     await this.healIfPoisoned();
     const { timedOut } = await this.navigationOp(() => this.view.reload(), timeoutMs);
     const page = await this.evaluate<{ title: string; url: string }>(installErrorForwarder).catch(() => null);
+    if (!timedOut) await this.awaitReady();
     return { url: page?.url ?? this.view.url, timedOut };
   }
 
@@ -1112,13 +1201,19 @@ export class Engine {
     y,
     timeoutMs = 600,
     pollMs = 15,
+    quietMs = 150,
+    quietCapMs = 1000,
   }: {
     x: number;
     y: number;
     timeoutMs?: number;
     pollMs?: number;
+    quietMs?: number;
+    quietCapMs?: number;
   }) {
-    await this.evaluate(installReactionProbe);
+    const quiet = await this.evaluate<{ quiet: boolean; ignoredNoisyNodes: number }>(
+      installReactionProbe(quietMs, quietCapMs),
+    );
     const net0 = this.networkBuf.length;
     const log0 = this.consoleBuf.length;
     const nav0 = this.navCount;
@@ -1183,6 +1278,8 @@ export class Engine {
       registeredDOMChanges: mutations,
       registeredNetworkRequests: networkRequests,
       registeredConsoleLogs: consoleLogs,
+      pageWasQuiet: quiet.quiet,
+      ignoredNoisyNodes: quiet.ignoredNoisyNodes,
       ...(networkRequests === null
         ? { note: 'network signal unavailable on webkit; use backend "chrome" for full fidelity' }
         : {}),
@@ -1215,16 +1312,26 @@ export class Engine {
     return { brokenAssets, statusCodesAvailable };
   }
 
-  async compileHealthReport(opts: { viewports?: Array<{ width: number; height: number }>; deadClickTargets?: Array<{ x: number; y: number }> } = {}) {
+  async compileHealthReport(
+    opts: {
+      viewports?: Array<{ width: number; height: number }>;
+      deadClickTargets?: Array<{ x: number; y: number }>;
+      sweepControls?: boolean;
+    } = {},
+  ) {
     const logs = await this.captureRuntimeLogs();
     const assets = await this.scanBrokenAssets();
     const responsive = opts.viewports ? await this.auditResponsiveness({ viewports: opts.viewports }) : { violations: [] };
 
+    const deadClickTargets = opts.deadClickTargets;
     const deadClicks: Array<Record<string, unknown>> = [];
-    for (const t of opts.deadClickTargets ?? []) {
+    for (const t of deadClickTargets ?? []) {
       const r = await this.detectDeadClicks(t);
       if (r.isDeadClick) deadClicks.push({ coordinates: r.coordinates });
     }
+    const swept = opts.sweepControls ? await this.crawl() : null;
+    if (swept) for (const d of swept.dead) deadClicks.push(d);
+    const measuredControls = Boolean(deadClickTargets) || Boolean(swept);
 
     const consoleErrors = logs.errors;
     const brokenAssets = assets.brokenAssets.length;
@@ -1236,7 +1343,12 @@ export class Engine {
       targetUrl: this.view.url,
       timestamp: new Date().toISOString(),
       totalErrors,
-      details: { consoleErrors, brokenAssets, deadClicks: deadClicks.length, overflowLayouts },
+      details: {
+        consoleErrors,
+        brokenAssets,
+        deadClicks: measuredControls ? deadClicks.length : null,
+        overflowLayouts,
+      },
       errors: {
         console: logs.consoleLogs.filter((l) => l.type === "error").map((l) => ({ type: l.type, message: l.text })),
         brokenAssets: assets.brokenAssets,
@@ -1245,47 +1357,101 @@ export class Engine {
       },
       backend: this.backend,
       statusCodesAvailable: assets.statusCodesAvailable,
+      ...(swept ? { controlsSwept: swept.controlsTested, controlsUntested: swept.unreachable } : {}),
+      ...(measuredControls
+        ? {}
+        : { note: "dead controls were not measured; pass sweepControls, or run crawl" }),
     };
   }
 
-  async crawl({ max = 20, dwellMs = 400 }: { max?: number; dwellMs?: number } = {}) {
-    const targetUrl = this.view.url;
-    const tree = await this.getInteractiveTree({ max });
-    const candidates = tree.interactiveElements.filter((el) => !el.disabled && !el.nativePicker);
-    const skipped = tree.interactiveElements.length - candidates.length;
+  async crawl({ max = 20, dwellMs = 400, maxSteps = 12, settleMs = 120 }: {
+    max?: number;
+    dwellMs?: number;
+    maxSteps?: number;
+    settleMs?: number;
+  } = {}) {
+    const targetUrl = await this.currentUrl();
+    const map = await this.scrollScan({ maxSteps, settleMs, maxElements: max * 4 });
 
+    const seenRefs = new Set<string>();
+    const queue = map.elements.filter((el) => {
+      const key = el.pinned
+        ? `pinned:${el.ref}@${el.documentX},${el.center.y}`
+        : `${el.ref}@${el.documentX},${el.documentY}`;
+      if (seenRefs.has(key)) return false;
+      seenRefs.add(key);
+      return true;
+    });
+
+    const baselineBlockers = new Set(map.occludedElements.map((o) => o.blockedBy));
     const dead: Array<Record<string, unknown>> = [];
+    const blockers = new Map<string, number>();
     let alive = 0;
+    let tested = 0;
+    let skipped = 0;
+    let unreachable = 0;
 
-    for (const el of candidates) {
-      if (el.leavesPage) {
-        alive++;
+    for (const el of queue) {
+      if (tested >= max) { skipped++; continue; }
+      if (el.disabled || el.nativePicker) { skipped++; continue; }
+      if (el.leavesPage) { tested++; alive++; continue; }
+
+      let found = await this.locate(el, map.viewportHeight);
+      if (found?.blockedBy && !baselineBlockers.has(found.blockedBy)) {
+        found = await this.dismissOverlay(el, map.viewportHeight, targetUrl, baselineBlockers);
+      }
+      if (!found) { unreachable++; continue; }
+      const live = found.el;
+
+      tested++;
+      this.onProgress("crawl", live.ref);
+      if (found.blockedBy) {
+        blockers.set(found.blockedBy, (blockers.get(found.blockedBy) ?? 0) + 1);
+        dead.push({
+          ref: live.ref,
+          text: live.text,
+          center: live.center,
+          reason: "blocked",
+          blockedBy: found.blockedBy,
+          appearedDuringCrawl: !baselineBlockers.has(found.blockedBy),
+          registeredDOMChanges: null,
+          registeredNetworkRequests: null,
+          registeredConsoleLogs: null,
+          pageWasQuiet: null,
+        });
         continue;
       }
-      const clicked = await this.detectDeadClicks({ x: el.center.x, y: el.center.y, timeoutMs: dwellMs });
+      const clicked = await this.detectDeadClicks({ x: live.center.x, y: live.center.y, timeoutMs: dwellMs });
       if (!clicked.isDeadClick) {
         alive++;
-        await this.goto(targetUrl);
-        continue;
+      } else {
+        const blocker = await this.detectPointerBlocker({ x: live.center.x, y: live.center.y });
+        dead.push({
+          ref: live.ref,
+          text: live.text,
+          center: live.center,
+          reason: blocker.isBlocked ? "blocked" : "no-handler",
+          blockedBy: blocker.isBlocked ? blocker.blockingElement : null,
+          registeredDOMChanges: clicked.registeredDOMChanges,
+          registeredNetworkRequests: clicked.registeredNetworkRequests,
+          registeredConsoleLogs: clicked.registeredConsoleLogs,
+          pageWasQuiet: clicked.pageWasQuiet,
+        });
       }
-      const blocker = await this.detectPointerBlocker({ x: el.center.x, y: el.center.y });
-      dead.push({
-        ref: el.ref,
-        text: el.text,
-        center: el.center,
-        reason: blocker.isBlocked ? "blocked" : "no-handler",
-        blockedBy: blocker.isBlocked ? blocker.blockingElement : null,
-        registeredDOMChanges: clicked.registeredDOMChanges,
-        registeredNetworkRequests: clicked.registeredNetworkRequests,
-        registeredConsoleLogs: clicked.registeredConsoleLogs,
-      });
+      if ((await this.currentUrl()) !== targetUrl) await this.goto(targetUrl);
     }
 
     let stillBlocked = 0;
-    for (const el of tree.occludedElements) {
-      const blocker = await this.detectPointerBlocker({ x: el.center.x, y: el.center.y });
+    const seenDead = new Set(dead.map((d) => d.ref as string));
+    for (const el of map.occludedElements) {
+      if (seenDead.has(el.ref)) continue;
+      await this.scrollToY(Math.max(0, el.documentY - Math.round(map.viewportHeight / 2)));
+      await Bun.sleep(80);
+      const y = Math.round(el.documentY - (await this.evaluate<number>("scrollY")));
+      const blocker = await this.detectPointerBlocker({ x: el.center.x, y });
       if (!blocker.isBlocked || blocker.intendedElement !== el.ref) continue;
       stillBlocked++;
+      if (blocker.blockingElement) blockers.set(blocker.blockingElement, (blockers.get(blocker.blockingElement) ?? 0) + 1);
       dead.push({
         ref: el.ref,
         text: el.text,
@@ -1295,19 +1461,24 @@ export class Engine {
         registeredDOMChanges: null,
         registeredNetworkRequests: null,
         registeredConsoleLogs: null,
+        pageWasQuiet: null,
       });
     }
+    if ((await this.currentUrl()) !== targetUrl) await this.goto(targetUrl);
 
     return {
       targetUrl,
-      controlsFound: tree.interactiveElements.length + stillBlocked,
-      controlsTested: candidates.length + stillBlocked,
+      controlsFound: queue.length + stillBlocked,
+      controlsTested: tested + stillBlocked,
       skipped,
+      unreachable,
       alive,
       dead,
-      occluded: tree.occluded,
-      blockedBy: tree.blockedBy,
-      truncated: tree.truncated,
+      occluded: map.occludedElements.length,
+      blockedBy: [...blockers].map(([ref, count]) => ({ ref, count })),
+      truncated: map.truncated,
+      pageHeight: map.pageHeight,
+      scrolled: map.steps > 1,
     };
   }
 
@@ -1318,7 +1489,7 @@ export class Engine {
     maxElements = 400,
   }: { maxSteps?: number; overlap?: number; settleMs?: number; maxElements?: number } = {}) {
     await this.scrollToY(0);
-    await Bun.sleep(settleMs);
+    await this.settleQuiet(settleMs);
 
     const elements = new Map<string, InteractiveElement>();
     const occludedElements = new Map<string, OccludedElement>();
@@ -1367,7 +1538,7 @@ export class Engine {
       lastScrollY = m.scrollY;
 
       await this.view.scroll(0, Math.max(100, Math.round(m.viewportHeight * (1 - overlap))));
-      await Bun.sleep(settleMs);
+      await this.settleQuiet(settleMs);
     }
 
     outline.sort((a, b) => (a.documentY as number) - (b.documentY as number));
@@ -1404,7 +1575,7 @@ export class Engine {
     includeDestructive?: boolean;
     settleMs?: number;
   } = {}) {
-    const startUrl = this.view.url;
+    const startUrl = await this.currentUrl();
     const consoleAtStart = this.consoleBuf.length;
 
     const map = await this.scrollScan({ maxSteps, settleMs, maxElements: maxControls * 4 });
@@ -1419,6 +1590,7 @@ export class Engine {
       return true;
     });
 
+    const baselineBlockers = new Set(map.occludedElements.map((o) => o.blockedBy));
     const results: Array<Record<string, unknown>> = [];
     const skipped: Array<Record<string, unknown>> = [];
     let tested = 0;
@@ -1445,8 +1617,24 @@ export class Engine {
         continue;
       }
 
-      const live = await this.locate(target, map.viewportHeight);
-      if (!live) { skipped.push({ ref: target.ref, reason: "not-reachable-after-scroll" }); continue; }
+      let found = await this.locate(target, map.viewportHeight);
+      if (found?.blockedBy && !baselineBlockers.has(found.blockedBy)) {
+        found = await this.dismissOverlay(target, map.viewportHeight, startUrl, baselineBlockers);
+      }
+      if (!found) { skipped.push({ ref: target.ref, reason: "not-reachable-after-scroll" }); continue; }
+      const live = found.el;
+      if (found.blockedBy) {
+        tested++;
+        results.push({
+          ref: live.ref,
+          text: live.text,
+          kind: "control",
+          status: "dead",
+          reason: "blocked",
+          blockedBy: found.blockedBy,
+        });
+        continue;
+      }
       if (!live.nativePicker && !(await this.stillThere(live.ref, live.center.x, live.center.y))) {
         skipped.push({ ref: live.ref, reason: "moving-target" });
         continue;
@@ -1458,7 +1646,7 @@ export class Engine {
         fillFields && isField ? await this.exerciseField(live) : await this.exerciseControl(live, dwellMs),
       );
 
-      if (this.view.url !== startUrl) await this.goto(startUrl);
+      if ((await this.currentUrl()) !== startUrl) await this.goto(startUrl);
     }
 
     const alreadySeen = new Set([...results.map((r) => r.ref), ...skipped.map((s) => s.ref)]);
@@ -1500,18 +1688,66 @@ export class Engine {
     };
   }
 
-  private async locate(target: InteractiveElement, viewportHeight: number): Promise<InteractiveElement | null> {
+  private async locate(
+    target: InteractiveElement,
+    viewportHeight: number,
+  ): Promise<{ el: InteractiveElement; blockedBy: string | null } | null> {
     if (!target.pinned) {
       await this.scrollToY(Math.max(0, target.documentY - Math.round(viewportHeight / 2)));
       await Bun.sleep(80);
     }
     const tree = await this.getInteractiveTree({ max: 150 });
-    const sameRef = tree.interactiveElements.filter((e) => e.ref === target.ref);
-    if (!sameRef.length) return null;
-    if (sameRef.length === 1) return sameRef[0]!;
-    const distance = (e: InteractiveElement) =>
+    const distance = (e: { documentX: number; documentY: number }) =>
       Math.abs(e.documentX - target.documentX) + Math.abs(e.documentY - target.documentY);
-    return sameRef.reduce((best, e) => (distance(e) < distance(best) ? e : best));
+    const nearest = <T extends { documentX: number; documentY: number }>(list: T[]) =>
+      list.reduce((best, e) => (distance(e) < distance(best) ? e : best));
+    const rehomed = (o: OccludedElement) => ({
+      el: { ...target, ref: o.ref, tag: o.tag, text: o.text, center: o.center, documentX: o.documentX, documentY: o.documentY },
+      blockedBy: o.blockedBy,
+    });
+
+    const byRef = tree.interactiveElements.filter((e) => e.ref === target.ref);
+    if (byRef.length) return { el: nearest(byRef), blockedBy: null };
+
+    const occludedByRef = tree.occludedElements.filter((e) => e.ref === target.ref);
+    if (occludedByRef.length) return rehomed(nearest(occludedByRef));
+
+    const byPosition = tree.interactiveElements.filter((e) => e.tag === target.tag && distance(e) <= 24);
+    if (byPosition.length) return { el: nearest(byPosition), blockedBy: null };
+
+    const occludedByPosition = tree.occludedElements.filter((e) => e.tag === target.tag && distance(e) <= 24);
+    if (occludedByPosition.length) return rehomed(nearest(occludedByPosition));
+
+    return null;
+  }
+
+  private async dismissOverlay(
+    target: InteractiveElement,
+    viewportHeight: number,
+    restoreUrl: string,
+    baselineBlockers: Set<string>,
+  ): Promise<{ el: InteractiveElement; blockedBy: string | null } | null> {
+    await this.pressKey({ key: "Escape" });
+    let found = await this.locate(target, viewportHeight);
+    if (!found?.blockedBy || baselineBlockers.has(found.blockedBy)) return found;
+
+    await this.goto(restoreUrl);
+    found = await this.locate(target, viewportHeight);
+    return found;
+  }
+
+  private async currentUrl(): Promise<string> {
+    const href = await this.evaluate<string>("location.href").catch(() => null);
+    return href ?? this.view.url;
+  }
+
+  private async awaitReady(): Promise<void> {
+    if (this.readyTimeoutMs <= 0) return;
+    await this.evaluate<{ ready: boolean; ms: number }>(readyProbe(this.readyTimeoutMs, 150)).catch(() => {});
+  }
+
+  private async settleQuiet(settleMs: number): Promise<void> {
+    await this.evaluate<{ quiet: boolean; ms: number }>(quietProbe(settleMs, settleMs * 5)).catch(() => {});
   }
 
   private async settle(maxMs: number): Promise<void> {
@@ -1523,7 +1759,35 @@ export class Engine {
   }
 
   private async scrollToY(y: number): Promise<void> {
-    await this.evaluate(`(() => { scrollTo(0, ${Math.max(0, Math.round(y))}); return 1; })()`);
+    const target = Math.max(0, Math.round(y));
+
+    for (let pass = 0; pass < 10; pass++) {
+      const start = await this.evaluate<{ at: number; want: number; max: number }>(`(() => {
+        const max = Math.max(0, document.documentElement.scrollHeight - innerHeight);
+        const want = Math.min(${target}, max);
+        scrollTo(0, want);
+        return { at: Math.round(scrollY), want: Math.round(want), max: Math.round(max) };
+      })()`);
+
+      let at = start.at;
+      let stalls = 0;
+      for (let i = 0; i < 12 && Math.abs(at - start.want) > 8; i++) {
+        await this.view.scroll(0, start.want - at);
+        await Bun.sleep(90);
+        const now = await this.evaluate<number>("Math.round(scrollY)");
+        if (now === at && ++stalls >= 3) break;
+        if (now !== at) stalls = 0;
+        at = now;
+      }
+
+      if (start.max >= target || Math.abs(at - target) <= 8) return;
+
+      await this.settleQuiet(120);
+      const grown = await this.evaluate<number>(
+        "Math.round(Math.max(0, document.documentElement.scrollHeight - innerHeight))",
+      );
+      if (grown <= start.max) return;
+    }
   }
 
   private async exerciseField(el: InteractiveElement): Promise<Record<string, unknown>> {
@@ -1582,7 +1846,7 @@ export class Engine {
     maxTargets = 5,
     settleMs = 250,
   }: { maxTargets?: number; settleMs?: number } = {}) {
-    const startUrl = this.view.url;
+    const startUrl = await this.currentUrl();
 
     const map = await this.scrollScan({ maxSteps: 8, settleMs: 100 });
     const candidates = map.elements.filter(
@@ -1599,10 +1863,11 @@ export class Engine {
     for (const c of candidates) {
       if (targets.length >= maxTargets) break;
       this.onProgress("probe", c.ref);
-      const live = await this.locate(c, map.viewportHeight);
-      if (!live) continue;
+      const found = await this.locate(c, map.viewportHeight);
+      if (!found || found.blockedBy) continue;
+      const live = found.el;
       const probe = await this.detectDeadClicks({ x: live.center.x, y: live.center.y, timeoutMs: 250 });
-      if (this.view.url !== startUrl) await this.goto(startUrl);
+      if ((await this.currentUrl()) !== startUrl) await this.goto(startUrl);
       if (probe.isDeadClick) { rejected.push({ ref: c.ref, reason: "no reaction to a plain click" }); continue; }
       targets.push(c);
     }
@@ -1625,14 +1890,15 @@ export class Engine {
     );
 
     const reset = async () => {
-      if (this.view.url !== startUrl) await this.goto(startUrl);
+      if ((await this.currentUrl()) !== startUrl) await this.goto(startUrl);
       await Bun.sleep(settleMs);
     };
 
     const run = async (name: string, target: InteractiveElement, body: (at: InteractiveElement) => Promise<void>) => {
       this.onProgress("scenario", `${name} → ${target.ref}`);
-      const at = await this.locate(target, map.viewportHeight);
-      if (!at) { scenarios.push({ name, target: target.ref, skipped: "could not relocate" }); return; }
+      const located = await this.locate(target, map.viewportHeight);
+      if (!located) { scenarios.push({ name, target: target.ref, skipped: "could not relocate" }); return; }
+      const at = located.el;
       const before = this.consoleBuf.length;
       let threw: string | null = null;
       try {
@@ -1702,7 +1968,7 @@ export class Engine {
       await run("interleaved-clicks", a!, async (at) => {
         const other = await this.locate(b!, map.viewportHeight);
         await this.view.click(at.center.x, at.center.y);
-        if (other) await this.view.click(other.center.x, other.center.y);
+        if (other) await this.view.click(other.el.center.x, other.el.center.y);
       });
     }
 
@@ -1831,7 +2097,7 @@ const TOOLS: Record<string, Tool> = {
   },
   crawl: {
     description:
-      "Click every actionable control on the page and report which ones do nothing, and why: swallowed by an overlay, or no handler fired at all. The fastest way to find broken buttons across a page.",
+      "Scroll the whole page, click every actionable control on it, and report which ones do nothing, and why: swallowed by an overlay, or no handler fired at all. The fastest way to find broken buttons across a page.",
     inputSchema: { type: "object", properties: { max: numSchema, dwellMs: numSchema } },
     run: (e, a) => e.crawl(a),
   },
@@ -2215,17 +2481,20 @@ const GLOBAL_FLAGS: Array<[string, string]> = [
 const COMMANDS: Record<string, CommandSpec> = {
   audit: {
     args: "<url>",
-    summary: "Health report: console errors, broken assets, layout overflow",
+    summary: "Health report: console errors, broken assets, overflow, dead controls",
     detail:
       "Loads the page and consolidates everything that looks wrong into one scorecard:\n" +
-      "console errors and uncaught exceptions, broken images and stylesheets, and\n" +
-      "horizontal overflow across viewports. Console capture starts before the first\n" +
-      "navigation, so load-time failures are included.",
-    flags: ["--viewports <list>", "--json"],
+      "console errors and uncaught exceptions, broken images and stylesheets, horizontal\n" +
+      "overflow across viewports, and every control that does nothing when clicked.\n" +
+      "Console capture starts before the first navigation, so load-time failures are\n" +
+      "included. Use --quick to skip the control sweep, which then reports dead controls\n" +
+      "as null rather than zero, because it did not look.",
+    flags: ["--viewports <list>", "--quick", "--json"],
     exits: "0 if nothing is wrong, 1 if any problem is found",
     examples: [
       "flamingo audit http://localhost:3000",
       "flamingo audit http://localhost:3000 --json | jq .details",
+      "flamingo audit http://localhost:3000 --quick",
       "flamingo audit https://staging.example.com --backend chrome",
     ],
   },
@@ -2233,10 +2502,11 @@ const COMMANDS: Record<string, CommandSpec> = {
     args: "<url>",
     summary: "Click every control and report the dead ones",
     detail:
-      "Walks the interactive tree and clicks each control, watching for DOM mutations,\n" +
-      "network requests, console output, navigation and focus. Controls that produce\n" +
-      "none of those are reported dead, with the reason: swallowed by an overlay, or\n" +
-      "no handler wired at all.",
+      "Scrolls the whole page, then clicks every control it mapped, watching for DOM\n" +
+      "mutations, network requests, console output, navigation and focus. Waits for the\n" +
+      "page to go quiet before each click so an earlier async result is never mistaken\n" +
+      "for this one. Controls that produce no reaction are reported dead, with the\n" +
+      "reason: swallowed by an overlay, or no handler wired at all.",
     flags: ["--max <n>", "--dwell <ms>", "--json"],
     exits: "0 if every control responds, 1 if any is dead",
     examples: [
@@ -2531,7 +2801,9 @@ function printAuditHuman(r: any) {
   const d = r.details;
   console.log(`${bold(r.targetUrl)}  ${dim(`${r.backend} backend`)}`);
   if (r.success) {
-    console.log(green(`\n✓ no problems found\n`));
+    console.log(green(`\n✓ no problems found`));
+    if (d.deadClicks === null) console.log(dim(`  dead controls were not checked here; run \`flamingo crawl\` for those`));
+    console.log();
     return;
   }
   console.log(red(`\n✗ ${r.totalErrors} problem${r.totalErrors === 1 ? "" : "s"}\n`));
@@ -2547,6 +2819,13 @@ function printAuditHuman(r: any) {
       console.log(`    ${red("✗")} ${a.type} ${a.source}${status}`);
     }
   }
+  if (d.deadClicks) {
+    console.log(`  ${bold("dead controls")} ${dim(`(${d.deadClicks})`)}`);
+    for (const c of r.errors.deadClicks.slice(0, 10)) {
+      const why = c.blockedBy ? `blocked by ${c.blockedBy}` : "no handler fired";
+      console.log(`    ${red("✗")} ${c.ref ?? JSON.stringify(c.coordinates)} ${dim(why)}`);
+    }
+  }
   if (d.overflowLayouts) {
     console.log(`  ${bold("layout overflow")} ${dim(`(${d.overflowLayouts})`)}`);
     for (const v of r.errors.responsive) {
@@ -2554,23 +2833,32 @@ function printAuditHuman(r: any) {
       console.log(`    ${red("✗")} ${v.viewport} overflows by ${v.overflowWidth}px${worst}`);
     }
   }
-  if (d.deadClicks) {
-    console.log(`  ${bold("dead clicks")} ${dim(`(${d.deadClicks})`)}`);
-    for (const c of r.errors.deadClicks) console.log(`    ${red("✗")} (${c.coordinates.x}, ${c.coordinates.y})`);
-  }
   console.log();
 }
 
 function printCrawlHuman(r: any) {
   console.log(`${bold(r.targetUrl)}\n`);
-  const skipNote = r.skipped ? dim(` (${r.skipped} disabled, skipped)`) : "";
+  const skipNote = r.skipped ? dim(` (${r.skipped} skipped)`) : "";
   console.log(`  ${r.controlsFound} control${r.controlsFound === 1 ? "" : "s"} found, ${r.controlsTested} tested${skipNote}`);
+  if (!r.controlsFound) {
+    console.log(yellow("\n⚠ no controls found on this page, so nothing was tested\n"));
+    return;
+  }
   console.log(`  ${green("✓")} ${r.alive} responded`);
+  if (r.unreachable) {
+    console.log(`  ${yellow("?")} ${r.unreachable} moved before they could be clicked, untested`);
+  }
   for (const b of r.blockedBy ?? []) {
-    console.log(`  ${yellow("blocked")} ${b.count} control${b.count === 1 ? "" : "s"} behind ${bold(b.ref)}, untestable until it is dismissed`);
+    const opened = r.dead.some((d: any) => d.blockedBy === b.ref && d.appearedDuringCrawl);
+    const origin = opened ? ", opened by a click during this crawl" : ", untestable until it is dismissed";
+    console.log(`  ${yellow("blocked")} ${b.count} control${b.count === 1 ? "" : "s"} behind ${bold(b.ref)}${origin}`);
   }
   if (!r.dead.length) {
-    console.log(green("\n✓ every control is wired up\n"));
+    console.log(
+      r.unreachable
+        ? yellow(`\n${r.alive} of ${r.controlsFound} controls verified, ${r.unreachable} untested\n`)
+        : green("\n✓ every control is wired up\n"),
+    );
     return;
   }
   console.log(`  ${red("✗")} ${r.dead.length} dead\n`);
@@ -2900,7 +3188,10 @@ async function runCli(argv: string[]): Promise<number> {
   try {
     switch (p.command) {
       case "audit": {
-        const r = await engine.compileHealthReport({ viewports: viewports ?? [{ width: 1920, height: 1080 }, { width: 375, height: 812 }] });
+        const r = await engine.compileHealthReport({
+          viewports: viewports ?? [{ width: 1920, height: 1080 }, { width: 375, height: 812 }],
+          sweepControls: p.flags.get("quick") !== true,
+        });
         if (json) console.log(JSON.stringify(r));
         else printAuditHuman(r);
         return r.success ? EXIT.ok : EXIT.problems;

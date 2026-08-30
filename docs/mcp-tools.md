@@ -311,7 +311,7 @@ Click a coordinate and report whether anything happened: DOM mutations, console 
 
 ### `crawl`
 
-Click every actionable control on the page and report which ones do nothing, and why: swallowed by an overlay, or no handler fired at all. The fastest way to find broken buttons across a page.
+Scroll the whole page, click every actionable control on it, and report which ones do nothing, and why: swallowed by an overlay, or no handler fired at all. The fastest way to find broken buttons across a page.
 
 ```json
 {

@@ -27,15 +27,17 @@
     {
       "name": "audit",
       "args": "<url>",
-      "summary": "Health report: console errors, broken assets, layout overflow",
+      "summary": "Health report: console errors, broken assets, overflow, dead controls",
       "flags": [
         "--viewports <list>",
+        "--quick",
         "--json"
       ],
       "exits": "0 if nothing is wrong, 1 if any problem is found",
       "examples": [
         "flamingo audit http://localhost:3000",
         "flamingo audit http://localhost:3000 --json | jq .details",
+        "flamingo audit http://localhost:3000 --quick",
         "flamingo audit https://staging.example.com --backend chrome"
       ]
     },
@@ -431,7 +433,7 @@
     },
     {
       "name": "crawl",
-      "description": "Click every actionable control on the page and report which ones do nothing, and why: swallowed by an overlay, or no handler fired at all. The fastest way to find broken buttons across a page.",
+      "description": "Scroll the whole page, click every actionable control on it, and report which ones do nothing, and why: swallowed by an overlay, or no handler fired at all. The fastest way to find broken buttons across a page.",
       "inputSchema": {
         "type": "object",
         "properties": {

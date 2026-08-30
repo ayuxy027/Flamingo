@@ -8,7 +8,7 @@ Flamingo 0.1.1 - AI Native Frontend Testing Toolkit
 
 | Command | Summary | Exit |
 | :-- | :-- | :-- |
-| `flamingo audit <url>` | Health report: console errors, broken assets, layout overflow | 0 if nothing is wrong, 1 if any problem is found |
+| `flamingo audit <url>` | Health report: console errors, broken assets, overflow, dead controls | 0 if nothing is wrong, 1 if any problem is found |
 | `flamingo crawl <url>` | Click every control and report the dead ones | 0 if every control responds, 1 if any is dead |
 | `flamingo scroll <url>` | Scroll the whole page and map everything on it | 0 unless the page fails to load |
 | `flamingo interact <url>` | Scroll the page and exercise every control on it | 0 if everything responded, 1 if any control is dead or drops input |
@@ -23,15 +23,16 @@ Flamingo 0.1.1 - AI Native Frontend Testing Toolkit
 
 ## `flamingo audit <url>`
 
-Health report: console errors, broken assets, layout overflow
+Health report: console errors, broken assets, overflow, dead controls
 
-**Options:** `--viewports <list>`, `--json`
+**Options:** `--viewports <list>`, `--quick`, `--json`
 
 **Exit:** 0 if nothing is wrong, 1 if any problem is found
 
 ```bash
 flamingo audit http://localhost:3000
 flamingo audit http://localhost:3000 --json | jq .details
+flamingo audit http://localhost:3000 --quick
 flamingo audit https://staging.example.com --backend chrome
 ```
 

@@ -125,7 +125,8 @@ for (const backend of ["webkit", "chrome"] as const) {
       const r = await e.compileHealthReport({ viewports: [{ width: 375, height: 812 }] });
       expect(r.success).toBe(false);
       const d = r.details;
-      expect(r.totalErrors).toBe(d.consoleErrors + d.brokenAssets + d.deadClicks + d.overflowLayouts);
+      expect(d.deadClicks).toBeNull();
+      expect(r.totalErrors).toBe(d.consoleErrors + d.brokenAssets + (d.deadClicks ?? 0) + d.overflowLayouts);
       expect(d.consoleErrors).toBeGreaterThan(0);
       expect(d.brokenAssets).toBeGreaterThan(0);
       expect(d.overflowLayouts).toBe(1);
